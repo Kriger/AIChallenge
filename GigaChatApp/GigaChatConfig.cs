@@ -26,4 +26,19 @@ public class GigaChatConfig
     /// Модель GigaChat. Например: "GigaChat-3-Ultra".
     /// </summary>
     public string Model { get; set; } = "GigaChat-2";
+
+    /// <summary>
+    /// System-сообщение с инструкциями для модели. Если пусто — системное сообщение не отправляется.
+    /// </summary>
+    public string SystemMessage { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Максимальное количество токенов в ответе. 0 означает без ограничения.
+    /// </summary>
+    public int MaxTokens { get; set; } = 0;
+
+    /// <summary>
+    /// Стоп-последовательности, завершающие генерацию ответа. Пустой массив — без ограничений.
+    /// </summary>
+    public string[] StopSequences { get; set; } = Array.Empty<string>();
 }

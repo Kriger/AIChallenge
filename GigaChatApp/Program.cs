@@ -32,6 +32,10 @@ if (string.IsNullOrEmpty(config.ClientId))
 Console.WriteLine("✅ Конфигурация загружена");
 Console.WriteLine($"   Модель: {config.Model}");
 Console.WriteLine();
+Console.WriteLine("📖 Команды: /status, /system <текст>, /maxtokens <число>, /stop <seq1,seq2>");
+Console.WriteLine("   Очистка: /clear | Выход: quit / exit / q");
+Console.WriteLine("   По умолчанию ограничений нет — задайте через команды выше.");
+Console.WriteLine();
 
 var handler = new HttpClientHandler
 {
@@ -90,6 +94,82 @@ while (true)
         Console.ResetColor();
         Console.WriteLine();
         continue;
+    }
+
+    // Команды конфигурации
+    if (input.StartsWith("/"))
+    {
+        var parts = input.Split(' ', 2, StringSplitOptions.TrimEntries);
+        var command = parts[0].ToLowerInvariant();
+
+        switch (command)
+        {
+            case "/status":
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine("📋 Текущие настройки:");
+                Console.ResetColor();
+                Console.WriteLine($"   Модель: {config.Model}");
+                Console.WriteLine($"   MaxTokens: {config.MaxTokens}");
+                Console.WriteLine($"   StopSequences: [{string.Join(", ", config.StopSequences.Select(s => $"\"{s}\""))}]");
+                Console.WriteLine($"   SystemMessage: {config.SystemMessage}");
+                Console.WriteLine();
+                continue;
+
+            case "/system":
+                if (parts.Length < 2)
+                {
+                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.WriteLine("❌ Укажите новое системное сообщение: /system <текст>");
+                    Console.ResetColor();
+                    Console.WriteLine();
+                    continue;
+                }
+                config.SystemMessage = parts[1];
+                Console.ForegroundColor = ConsoleColor.Green;
+                Console.WriteLine("✅ SystemMessage обновлён.");
+                Console.ResetColor();
+                Console.WriteLine();
+                continue;
+
+            case "/maxtokens":
+                if (parts.Length < 2 || !int.TryParse(parts[1], out var maxTokens))
+                {
+                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.WriteLine("❌ Укажите число: /maxtokens <число>");
+                    Console.ResetColor();
+                    Console.WriteLine();
+                    continue;
+                }
+                config.MaxTokens = maxTokens;
+                Console.ForegroundColor = ConsoleColor.Green;
+                Console.WriteLine($"✅ MaxTokens установлен в {maxTokens}.");
+                Console.ResetColor();
+                Console.WriteLine();
+                continue;
+
+            case "/stop":
+                if (parts.Length < 2)
+                {
+                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.WriteLine("❌ Укажите стоп-последовательности через запятую: /stop <seq1,seq2,...>");
+                    Console.ResetColor();
+                    Console.WriteLine();
+                    continue;
+                }
+                config.StopSequences = parts[1].Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+                Console.ForegroundColor = ConsoleColor.Green;
+                Console.WriteLine($"✅ StopSequences обновлены: [{string.Join(", ", config.StopSequences.Select(s => $"\"{s}\""))}]");
+                Console.ResetColor();
+                Console.WriteLine();
+                continue;
+
+            default:
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine($"❌ Неизвестная команда: {command}. Доступны: /status, /system, /maxtokens, /stop");
+                Console.ResetColor();
+                Console.WriteLine();
+                continue;
+        }
     }
 
     if (string.IsNullOrEmpty(input))

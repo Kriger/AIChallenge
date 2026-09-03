@@ -29,13 +29,31 @@ public class ChatClient
         _httpClient.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", token);
 
-        var requestBody = new
+        var messagesList = new List<object>();
+
+        if (!string.IsNullOrEmpty(_config.SystemMessage))
         {
-            model = "GigaChat-2",
-            messages = _messages.Select(m => new { m.Role, m.Content }),
-            stream = false,
-            repetition_penalty = 1,
+            messagesList.Add(new { Role = "system", Content = _config.SystemMessage });
+        }
+        messagesList.AddRange(_messages.Select(m => new { m.Role, m.Content }));
+
+        var requestBody = new Dictionary<string, object>
+        {
+            ["model"] = _config.Model,
+            ["messages"] = messagesList,
+            ["stream"] = false,
+            ["repetition_penalty"] = 1,
         };
+
+        if (_config.MaxTokens > 0)
+        {
+            requestBody["max_tokens"] = _config.MaxTokens;
+        }
+
+        if (_config.StopSequences.Length > 0)
+        {
+            requestBody["stop"] = _config.StopSequences;
+        }
 
         var response = await _httpClient.PostAsJsonAsync(
             "/v1/chat/completions",
