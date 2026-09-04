@@ -30,9 +30,20 @@ if (string.IsNullOrEmpty(config.ClientId))
 }
 
 Console.WriteLine("✅ Конфигурация загружена");
-Console.WriteLine($"   Модель: {config.Model}");
 Console.WriteLine();
-Console.WriteLine("📖 Команды: /status, /system <текст>, /maxtokens <число>, /stop <seq1,seq2>, /temp <0-2>");
+
+// Выбор модели
+Console.WriteLine("📦 Доступные модели:");
+foreach (var kvp in AvailableModels.Models)
+{
+    var marker = kvp.Value == config.Model ? " ▶" : "";
+    Console.WriteLine($"   {kvp.Key}. {kvp.Value}{marker}");
+}
+Console.WriteLine();
+Console.WriteLine("   Для смены модели во время работы используйте команду /model");
+Console.WriteLine();
+Console.WriteLine();
+Console.WriteLine("📖 Команды: /status, /model, /system <текст>, /maxtokens <число>, /stop <seq1,seq2>, /temp <0-2>");
 Console.WriteLine("   Очистка: /clear | Выход: quit / exit / q");
 Console.WriteLine("   По умолчанию ограничений нет — задайте через команды выше.");
 Console.WriteLine();
@@ -113,6 +124,46 @@ while (true)
                 Console.WriteLine($"   MaxTokens: {config.MaxTokens}");
                 Console.WriteLine($"   StopSequences: [{string.Join(", ", config.StopSequences.Select(s => $"\"{s}\""))}]");
                 Console.WriteLine($"   SystemMessage: {config.SystemMessage}");
+                Console.WriteLine();
+                continue;
+
+            case "/model":
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine("📦 Доступные модели:");
+                Console.ResetColor();
+                foreach (var kvp in AvailableModels.Models)
+                {
+                    var marker = kvp.Value == config.Model ? " ▶" : "";
+                    Console.WriteLine($"   {kvp.Key}. {kvp.Value}{marker}");
+                }
+                Console.WriteLine();
+                Console.Write("   Введите номер или название: ");
+                Console.ResetColor();
+
+                var modelInputCmd = Console.ReadLine()?.Trim();
+                if (!string.IsNullOrEmpty(modelInputCmd))
+                {
+                    if (int.TryParse(modelInputCmd, out var modelNumber) && AvailableModels.Models.ContainsKey(modelNumber))
+                    {
+                        config.Model = AvailableModels.Models[modelNumber];
+                        Console.ForegroundColor = ConsoleColor.Green;
+                        Console.WriteLine($"✅ Модель изменена на: {config.Model}");
+                        Console.ResetColor();
+                    }
+                    else if (AvailableModels.Models.ContainsValue(modelInputCmd))
+                    {
+                        config.Model = modelInputCmd;
+                        Console.ForegroundColor = ConsoleColor.Green;
+                        Console.WriteLine($"✅ Модель изменена на: {config.Model}");
+                        Console.ResetColor();
+                    }
+                    else
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine($"❌ Модель '{modelInputCmd}' не найдена.");
+                        Console.ResetColor();
+                    }
+                }
                 Console.WriteLine();
                 continue;
 
@@ -210,7 +261,7 @@ while (true)
 
             default:
                 Console.ForegroundColor = ConsoleColor.Red;
-                Console.WriteLine($"❌ Неизвестная команда: {command}. Доступны: /status, /system, /maxtokens, /stop");
+                Console.WriteLine($"❌ Неизвестная команда: {command}. Доступны: /status, /model, /system, /maxtokens, /stop, /temp");
                 Console.ResetColor();
                 Console.WriteLine();
                 continue;
@@ -228,13 +279,29 @@ while (true)
         Console.Write("⏳ Думает...");
         Console.ResetColor();
 
-        var answer = await chatClient.SendMessageAsync(input);
+        var response = await chatClient.SendMessageAsync(input);
+
+        var duration = response.Duration.TotalSeconds < 1
+            ? $"{response.Duration.TotalMilliseconds:F0} мс"
+            : $"{response.Duration.TotalSeconds:F1} с";
 
         Console.WriteLine();
         Console.ForegroundColor = ConsoleColor.Green;
         Console.WriteLine("🤖 GigaChat:");
         Console.ResetColor();
-        Console.WriteLine($"   {answer}");
+        Console.WriteLine($"   {response.Answer}");
+        Console.WriteLine();
+
+        // Статистика
+        Console.ForegroundColor = ConsoleColor.Gray;
+        Console.Write($"   ⏱ {duration}");
+        if (response.Usage is not null)
+        {
+            var u = response.Usage;
+            Console.Write($"  |  📊 Токены: {u.PromptTokens} в → {u.CompletionTokens} out → {u.TotalTokens} всего");
+        }
+        Console.ResetColor();
+        Console.WriteLine();
         Console.WriteLine();
     }
     catch (Exception ex)

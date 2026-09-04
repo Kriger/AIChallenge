@@ -3,6 +3,31 @@ using System.Net.Http.Headers;
 namespace GigaChatApp;
 
 /// <summary>
+/// Результат запроса к GigaChat API.
+/// </summary>
+public class ChatResponse
+{
+    public string Answer { get; set; } = string.Empty;
+    public TimeSpan Duration { get; set; }
+    public TokenUsage? Usage { get; set; }
+}
+
+/// <summary>
+/// Использование токенов.
+/// </summary>
+public class TokenUsage
+{
+    [JsonPropertyName("prompt_tokens")]
+    public int PromptTokens { get; set; }
+
+    [JsonPropertyName("completion_tokens")]
+    public int CompletionTokens { get; set; }
+
+    [JsonPropertyName("total_tokens")]
+    public int TotalTokens { get; set; }
+}
+
+/// <summary>
 /// Клиент для отправки запросов в GigaChat API.
 /// </summary>
 public class ChatClient
@@ -20,7 +45,7 @@ public class ChatClient
         _authClient = authClient;
     }
 
-    public async Task<string> SendMessageAsync(string userMessage)
+    public async Task<ChatResponse> SendMessageAsync(string userMessage)
     {
         _messages.Add(new ChatMessage { Role = "user", Content = userMessage });
 
@@ -60,10 +85,14 @@ public class ChatClient
             requestBody["temperature"] = _config.Temperature.Value;
         }
 
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
         var response = await _httpClient.PostAsJsonAsync(
             "/v1/chat/completions",
             requestBody
         );
+
+        stopwatch.Stop();
 
         if (!response.IsSuccessStatusCode)
         {
@@ -81,10 +110,14 @@ public class ChatClient
         }
 
         var answer = chatResponse.Choices[0].Message?.Content ?? "Пустой ответ";
-
         _messages.Add(new ChatMessage { Role = "assistant", Content = answer });
 
-        return answer;
+        return new ChatResponse
+        {
+            Answer = answer,
+            Duration = stopwatch.Elapsed,
+            Usage = chatResponse.Usage,
+        };
     }
 
     public void ClearHistory()
@@ -102,6 +135,9 @@ public class ChatClient
     {
         [JsonPropertyName("choices")]
         public List<ChoiceItem>? Choices { get; set; }
+
+        [JsonPropertyName("usage")]
+        public TokenUsage? Usage { get; set; }
     }
 
     private class ChoiceItem
