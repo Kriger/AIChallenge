@@ -55,6 +55,11 @@ public class ChatClient
             requestBody["stop"] = _config.StopSequences;
         }
 
+        if (_config.Temperature.HasValue)
+        {
+            requestBody["temperature"] = _config.Temperature.Value;
+        }
+
         var response = await _httpClient.PostAsJsonAsync(
             "/v1/chat/completions",
             requestBody

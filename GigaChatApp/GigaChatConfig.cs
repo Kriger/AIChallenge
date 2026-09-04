@@ -41,4 +41,9 @@ public class GigaChatConfig
     /// Стоп-последовательности, завершающие генерацию ответа. Пустой массив — без ограничений.
     /// </summary>
     public string[] StopSequences { get; set; } = Array.Empty<string>();
+
+    /// <summary>
+    /// Температура генерации. null — без ограничения. Допустимые значения: 0, 0.7, 1.2.
+    /// </summary>
+    public double? Temperature { get; set; } = null;
 }

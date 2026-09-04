@@ -32,7 +32,7 @@ if (string.IsNullOrEmpty(config.ClientId))
 Console.WriteLine("✅ Конфигурация загружена");
 Console.WriteLine($"   Модель: {config.Model}");
 Console.WriteLine();
-Console.WriteLine("📖 Команды: /status, /system <текст>, /maxtokens <число>, /stop <seq1,seq2>");
+Console.WriteLine("📖 Команды: /status, /system <текст>, /maxtokens <число>, /stop <seq1,seq2>, /temp <0-2>");
 Console.WriteLine("   Очистка: /clear | Выход: quit / exit / q");
 Console.WriteLine("   По умолчанию ограничений нет — задайте через команды выше.");
 Console.WriteLine();
@@ -109,6 +109,7 @@ while (true)
                 Console.WriteLine("📋 Текущие настройки:");
                 Console.ResetColor();
                 Console.WriteLine($"   Модель: {config.Model}");
+                Console.WriteLine($"   Temperature: {config.Temperature ?? (object)"(не задано)"}");
                 Console.WriteLine($"   MaxTokens: {config.MaxTokens}");
                 Console.WriteLine($"   StopSequences: [{string.Join(", ", config.StopSequences.Select(s => $"\"{s}\""))}]");
                 Console.WriteLine($"   SystemMessage: {config.SystemMessage}");
@@ -159,6 +160,50 @@ while (true)
                 config.StopSequences = parts[1].Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
                 Console.ForegroundColor = ConsoleColor.Green;
                 Console.WriteLine($"✅ StopSequences обновлены: [{string.Join(", ", config.StopSequences.Select(s => $"\"{s}\""))}]");
+                Console.ResetColor();
+                Console.WriteLine();
+                continue;
+
+            case "/temp":
+            case "/temperature":
+                if (parts.Length < 2)
+                {
+                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.WriteLine("❌ Укажите число: /temp <0-2>. Пример: /temp 0.7");
+                    Console.WriteLine("   /temp clear — сбросить ограничение.");
+                    Console.ResetColor();
+                    Console.WriteLine();
+                    continue;
+                }
+                if (parts[1].Equals("clear", StringComparison.OrdinalIgnoreCase))
+                {
+                    config.Temperature = null;
+                    Console.ForegroundColor = ConsoleColor.Green;
+                    Console.WriteLine("✅ Temperature сброшен.");
+                    Console.ResetColor();
+                    Console.WriteLine();
+                    continue;
+                }
+                double temp;
+                if (!double.TryParse(parts[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out temp))
+                {
+                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.WriteLine("❌ Укажите число: /temp <0-2>. Пример: /temp 0.7");
+                    Console.ResetColor();
+                    Console.WriteLine();
+                    continue;
+                }
+                if (temp < 0 || temp > 2)
+                {
+                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.WriteLine("❌ Temperature должно быть в диапазоне 0–2.");
+                    Console.ResetColor();
+                    Console.WriteLine();
+                    continue;
+                }
+                config.Temperature = temp;
+                Console.ForegroundColor = ConsoleColor.Green;
+                Console.WriteLine($"✅ Temperature установлен в {temp}.");
                 Console.ResetColor();
                 Console.WriteLine();
                 continue;
