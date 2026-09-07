@@ -10,6 +10,6 @@ public static class AvailableModels
         { 1, "GigaChat-2" },
         { 2, "GigaChat-2-Pro" },
         { 3, "GigaChat-2-Max" },
-        { 4, "GigaChat-3-Ultra" },
+        { 4, "GigaChat-3-Ultra" }
     };
 }

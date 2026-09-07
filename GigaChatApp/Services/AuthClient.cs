@@ -1,6 +1,6 @@
 using System.Net.Http.Headers;
 
-namespace GigaChatApp;
+namespace GigaChatApp.Services;
 
 /// <summary>
 /// Клиент OAuth2-аутентификации для GigaChat.
@@ -9,12 +9,12 @@ namespace GigaChatApp;
 public class AuthClient
 {
     private readonly HttpClient _httpClient;
-    private readonly GigaChatConfig _config;
+    private readonly Models.GigaChatConfig _config;
 
     private string? _cachedToken;
     private DateTime _tokenExpiresAt;
 
-    public AuthClient(HttpClient httpClient, GigaChatConfig config)
+    public AuthClient(HttpClient httpClient, Models.GigaChatConfig config)
     {
         _httpClient = httpClient;
         _config = config;
@@ -75,14 +75,5 @@ public class AuthClient
         {
             _tokenExpiresAt = DateTime.UtcNow.AddHours(1);
         }
-    }
-
-    private class TokenResponse
-    {
-        [JsonPropertyName("access_token")]
-        public string? AccessToken { get; set; }
-
-        [JsonPropertyName("expires_at")]
-        public long? ExpiresAt { get; set; }
     }
 }

@@ -1,4 +1,4 @@
-namespace GigaChatApp;
+namespace GigaChatApp.Models;
 
 /// <summary>
 /// Конфигурация GigaChat API.
