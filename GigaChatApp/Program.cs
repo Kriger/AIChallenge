@@ -50,7 +50,7 @@ Console.WriteLine("📖 Команды: /status, /model, /system <текст>, /
 Console.WriteLine("   Адаптация: /adaptive (статус), /adaptive on/off/reset/threshold <значение>");
 Console.WriteLine("   Планировщик: /planner (статус)");
 Console.WriteLine("   Память: /memory list, /memory save <ключ> <значение>, /memory delete <ключ>, /memory search <запрос>");
-Console.WriteLine("   Очистка: /clear | Выход: quit / exit / q");
+Console.WriteLine("   Очистка: /clear | Сохранить: /save | Выход: quit / exit / q");
 Console.WriteLine("   По умолчанию ограничений нет — задайте через команды выше.");
 Console.WriteLine();
 
@@ -83,6 +83,9 @@ agent.MaxTokens = config.MaxTokens;
 agent.Temperature = config.Temperature;
 agent.StopSequences = config.StopSequences;
 
+// Загружаем контекст из предыдущей сессии
+ContextPersistence.LoadContext(agent);
+
 Console.WriteLine("🔄 Инициализация подключения к GigaChat...");
 
 try
@@ -111,6 +114,9 @@ while (true)
 
     if (input is null or "quit" or "exit" or "выход" or "q")
     {
+        // Сохраняем контекст перед выходом
+        ContextPersistence.SaveContext(agent);
+
         Console.WriteLine();
         Console.ForegroundColor = ConsoleColor.Gray;
         Console.WriteLine("👋 До свидания!");
@@ -583,9 +589,17 @@ while (true)
                 }
                 continue;
 
+            case "/save":
+                ContextPersistence.SaveContext(agent);
+                Console.ForegroundColor = ConsoleColor.Green;
+                Console.WriteLine("✅ Контекст сохранён.");
+                Console.ResetColor();
+                Console.WriteLine();
+                continue;
+
             default:
                 Console.ForegroundColor = ConsoleColor.Red;
-                Console.WriteLine($"❌ Неизвестная команда: {command}. Доступны: /status, /model, /system, /maxtokens, /stop, /temp, /retry, /retrydelay, /loglevel, /metrics, /adaptive, /planner, /memory");
+                Console.WriteLine($"❌ Неизвестная команда: {command}. Доступны: /status, /model, /system, /maxtokens, /stop, /temp, /retry, /retrydelay, /loglevel, /metrics, /adaptive, /planner, /memory, /save");
                 Console.ResetColor();
                 Console.WriteLine();
                 continue;

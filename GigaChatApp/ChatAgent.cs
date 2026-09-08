@@ -497,6 +497,19 @@ public class ChatAgent
     }
 
     /// <summary>
+    /// Загружает историю диалога из внешнего источника.
+    /// </summary>
+    public void LoadHistory(IEnumerable<ApiMessage> messages)
+    {
+        _history.Clear();
+        foreach (var msg in messages)
+        {
+            _history.Add(msg);
+        }
+        Logger.Info($"Загружено {messages.Count()} сообщений истории");
+    }
+
+    /// <summary>
     /// Вспомогательный метод для обрезки строк.
     /// </summary>
     private static string Truncate(string value, int maxLength)

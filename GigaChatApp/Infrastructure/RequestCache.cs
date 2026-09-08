@@ -93,6 +93,17 @@ public class RequestCache
     }
 
     /// <summary>
+    /// Загружает записи в кэш из внешнего источника.
+    /// </summary>
+    internal void LoadEntries(IEnumerable<CachedEntry> entries)
+    {
+        foreach (var entry in entries)
+        {
+            _cache[entry.Answer] = entry;
+        }
+    }
+
+    /// <summary>
     /// Количество записей в кэше.
     /// </summary>
     public int Count => _cache.Count;
