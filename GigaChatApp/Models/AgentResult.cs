@@ -14,6 +14,12 @@ public class AgentResult
     /// <summary>Использование токенов.</summary>
     public TokenUsage? Usage { get; set; }
 
+    /// <summary>Количество токенов текущего запроса пользователя (оценка).</summary>
+    public int CurrentRequestTokens { get; set; }
+
+    /// <summary>Количество токенов всей истории диалога (оценка).</summary>
+    public int HistoryTokens { get; set; }
+
     /// <summary>Сообщение об ошибке, если запрос не удался.</summary>
     public string? Error { get; set; }
 

@@ -169,10 +169,10 @@ public class ChatAgent
             Logger.Error($"Ошибка: {result.Error}");
         }
 
-        // 7. Адаптация на основе метрик
+        // 8. Адаптация на основе метрик
         Adaptive.Adapt();
 
-        // 8. Выводим сохранённые факты
+        // 9. Выводим сохранённые факты
         PrintSavedFacts();
 
         return result;

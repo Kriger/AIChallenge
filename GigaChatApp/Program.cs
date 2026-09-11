@@ -121,6 +121,14 @@ while (true)
         Console.ForegroundColor = ConsoleColor.Gray;
         Console.WriteLine("👋 До свидания!");
         Console.ResetColor();
+
+        // Итоговая статистика по токенам (реальные данные из API)
+        var met = agent.Metrics;
+        var totalTokens = met.TotalPromptTokens + met.TotalCompletionTokens;
+        Console.ForegroundColor = ConsoleColor.DarkGray;
+        Console.WriteLine($"📊 Токены: {met.TotalPromptTokens} в → {met.TotalCompletionTokens} out → {totalTokens} всего");
+        Console.ResetColor();
+
         break;
     }
 
@@ -643,9 +651,9 @@ while (true)
     Console.Write($"   ⏱ {duration}");
     if (result.Source == Source.Cache)
     {
-        Console.Write("  |  [из кэша]");
+        Console.Write("  |  [из кэша]  |  Токенов не потреблено");
     }
-    if (result.Usage is not null)
+    else if (result.Usage is not null)
     {
         var u = result.Usage;
         Console.Write($"  |  📊 Токены: {u.PromptTokens} в → {u.CompletionTokens} out → {u.TotalTokens} всего");
