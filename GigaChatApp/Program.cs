@@ -50,6 +50,7 @@ Console.WriteLine("📖 Команды: /status, /model, /system <текст>, /
 Console.WriteLine("   Адаптация: /adaptive (статус), /adaptive on/off/reset/threshold <значение>");
 Console.WriteLine("   Планировщик: /planner (статус)");
 Console.WriteLine("   Память: /memory list, /memory save <ключ> <значение>, /memory delete <ключ>, /memory search <запрос>");
+Console.WriteLine("   Контекст: /context (статус), /context on/off, /context recent <N>, /context interval <N>, /context report");
 Console.WriteLine("   Очистка: /clear | Сохранить: /save | Выход: quit / exit / q");
 Console.WriteLine("   По умолчанию ограничений нет — задайте через команды выше.");
 Console.WriteLine();
@@ -70,7 +71,19 @@ var chatClient = new ChatClient(httpClient);
 var logger = new AgentLogger(LogLevel.Info);
 var cache = new RequestCache(maxSize: 100);
 var memory = new Memory(logger);
-var agent = new ChatAgent(chatClient, authClient, cache, logger, memory);
+
+// Инициализация управления контекстом
+var contextConfig = new ContextManagerConfig
+{
+    Enabled = config.ContextCompressionEnabled,
+    RecentMessageCount = config.ContextRecentMessageCount,
+    SummaryInterval = config.ContextSummaryInterval,
+    MaxSummaries = config.ContextMaxSummaries,
+    MaxContextTokens = config.ContextMaxTokens,
+};
+
+var contextManager = new ContextManager(chatClient, authClient, logger, contextConfig);
+var agent = new ChatAgent(chatClient, authClient, cache, logger, memory, null, null, contextManager);
 var adaptive = new AdaptiveBehavior(agent.Metrics, cache, logger);
 var planner = new Planner(chatClient, authClient, config.Model, logger, memory);
 agent.Adaptive = adaptive;
@@ -82,6 +95,8 @@ agent.SystemMessage = config.SystemMessage;
 agent.MaxTokens = config.MaxTokens;
 agent.Temperature = config.Temperature;
 agent.StopSequences = config.StopSequences;
+
+agent.Metrics.ContextCompressionEnabled = contextConfig.Enabled;
 
 // Загружаем контекст из предыдущей сессии
 ContextPersistence.LoadContext(agent);
@@ -160,6 +175,18 @@ while (true)
                 Console.WriteLine($"   StopSequences: [{string.Join(", ", agent.StopSequences.Select(s => $"\"{s}\""))}]");
                 Console.WriteLine($"   SystemMessage: {agent.SystemMessage}");
                 Console.WriteLine();
+
+                // Статус контекста
+                var cmStatus = agent.ContextManager;
+                var cfgStatus = cmStatus.Config;
+                Console.ForegroundColor = ConsoleColor.Cyan;
+                Console.WriteLine("📦 Управление контекстом:");
+                Console.ResetColor();
+                Console.WriteLine($"   Включено: {(cfgStatus.Enabled ? "да" : "нет")}");
+                Console.WriteLine($"   Recent: {cfgStatus.RecentMessageCount}, Interval: {cfgStatus.SummaryInterval}");
+                Console.WriteLine($"   Summary блоков: {cmStatus.SummaryCount}");
+                Console.WriteLine();
+
                 Console.WriteLine("📈 Метрики:");
                 Console.ResetColor();
                 var m = agent.Metrics;
@@ -168,6 +195,7 @@ while (true)
                 Console.WriteLine($"   Success rate: {m.SuccessRate:P1}");
                 Console.WriteLine($"   Avg duration: {m.TotalDuration.TotalMilliseconds:F0} мс");
                 Console.WriteLine($"   Токены: {m.TotalPromptTokens} in → {m.TotalCompletionTokens} out");
+                Console.WriteLine($"   Токены контекста: {m.TotalContextTokens} всего, {m.LastContextTokens} последний");
                 Console.WriteLine($"   Кэш: {agent.Cache.Count} записей");
                 Console.WriteLine();
                 continue;
@@ -372,9 +400,19 @@ while (true)
                 Console.WriteLine($"   Success rate: {met.SuccessRate:P1}");
                 Console.WriteLine($"   Avg duration: {met.TotalDuration.TotalMilliseconds:F0} мс");
                 Console.WriteLine($"   Токены: {met.TotalPromptTokens} in → {met.TotalCompletionTokens} out");
+                Console.WriteLine($"   Токены контекста: {met.TotalContextTokens} всего, {met.LastContextTokens} последний");
                 Console.WriteLine($"   Кэш: {agent.Cache.Count} записей");
                 Console.WriteLine($"   Память: {agent.Memory.Count} фактов");
                 Console.WriteLine();
+
+                // Метрики контекста
+                if (met.ContextComparison.ComparisonCount > 0)
+                {
+                    Console.ForegroundColor = ConsoleColor.Green;
+                    Console.WriteLine("📦 Метрики управления контекстом:");
+                    Console.ResetColor();
+                    Console.WriteLine(met.ContextComparison.GetReport());
+                }
                 continue;
 
             case "/adaptive":
@@ -591,6 +629,175 @@ while (true)
                     default:
                         Console.ForegroundColor = ConsoleColor.Red;
                         Console.WriteLine($"❌ Неизвестная команда памяти: {memoryCommand}. Доступны: list, save, delete, search");
+                        Console.ResetColor();
+                        Console.WriteLine();
+                        break;
+                }
+                continue;
+
+            case "/context":
+                if (parts.Length < 2)
+                {
+                    // Показываем статус контекста
+                    Console.ForegroundColor = ConsoleColor.Yellow;
+                    Console.WriteLine("📦 Управление контекстом:");
+                    Console.ResetColor();
+                    var cm = agent.ContextManager;
+                    var cfg = cm.Config;
+                    Console.WriteLine($"   Включено: {(cfg.Enabled ? "да" : "нет")}");
+                    Console.WriteLine($"   Recent сообщений: {cfg.RecentMessageCount}");
+                    Console.WriteLine($"   Интервал summary: каждые {cfg.SummaryInterval} сообщений");
+                    Console.WriteLine($"   Max summary блоков: {cfg.MaxSummaries}");
+                    Console.WriteLine($"   Всего сообщений в истории: {cm.TotalHistoryCount}");
+                    Console.WriteLine($"   Summary блоков: {cm.SummaryCount}");
+                    Console.WriteLine($"   Recent доступно: {cm.RecentCount}");
+                    Console.WriteLine();
+
+                    // Метрики сравнения
+                    if (agent.Metrics.ContextComparison.ComparisonCount > 0)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Green;
+                        Console.WriteLine("📊 Метрики сжатия:");
+                        Console.ResetColor();
+                        var comp = agent.Metrics.ContextComparison;
+                        Console.WriteLine($"   Сравнений: {comp.ComparisonCount}");
+                        Console.WriteLine($"   Токены до:     {comp.TotalOriginalTokens,10:N0}");
+                        Console.WriteLine($"   Токены после:  {comp.TotalCompressedTokens,10:N0}");
+                        Console.WriteLine($"   Экономия:      {comp.TotalTokenSavings,10:N0} ({comp.TokenSavingsPercent:F1}%)");
+                        Console.WriteLine();
+                    }
+
+                    Console.WriteLine("   Команды: /context on, /context off, /context reset");
+                    Console.WriteLine("   Настройки: /context recent <N>, /context interval <N>, /context report");
+                    Console.WriteLine();
+                    continue;
+                }
+
+                var contextCommand = parts[1].ToLowerInvariant();
+
+                switch (contextCommand)
+                {
+                    case "on":
+                        contextConfig.Enabled = true;
+                        agent.ContextManager.Config.Enabled = true;
+                        agent.Metrics.ContextCompressionEnabled = true;
+                        Console.ForegroundColor = ConsoleColor.Green;
+                        Console.WriteLine("✅ Управление контекстом включено (сжатие с summary)");
+                        Console.ResetColor();
+                        Console.WriteLine();
+                        break;
+
+                    case "off":
+                        contextConfig.Enabled = false;
+                        agent.ContextManager.Config.Enabled = false;
+                        agent.Metrics.ContextCompressionEnabled = false;
+                        Console.ForegroundColor = ConsoleColor.Yellow;
+                        Console.WriteLine("⚠️  Управление контекстом выключено (полная история)");
+                        Console.ResetColor();
+                        Console.WriteLine();
+                        break;
+
+                    case "reset":
+                        contextConfig.Enabled = false;
+                        contextConfig.RecentMessageCount = 10;
+                        contextConfig.SummaryInterval = 10;
+                        contextConfig.MaxSummaries = 20;
+                        contextConfig.MaxContextTokens = 0;
+                        agent.ContextManager.Config.Enabled = false;
+                        agent.ContextManager.Config.RecentMessageCount = 10;
+                        agent.ContextManager.Config.SummaryInterval = 10;
+                        agent.ContextManager.Config.MaxSummaries = 20;
+                        agent.ContextManager.Config.MaxContextTokens = 0;
+                        agent.Metrics.ContextCompressionEnabled = false;
+                        agent.ContextManager.Clear();
+                        agent.Metrics.ContextComparison.Reset();
+                        Console.ForegroundColor = ConsoleColor.Green;
+                        Console.WriteLine("✅ Параметры контекста сброшены, история очищена");
+                        Console.ResetColor();
+                        Console.WriteLine();
+                        break;
+
+                    case "recent":
+                        if (parts.Length < 3 || !int.TryParse(parts[2], out var recentCount))
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine("❌ Формат: /context recent <N>. Пример: /context recent 15");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                            break;
+                        }
+                        if (recentCount < 1)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine("❌ Recent должно быть >= 1");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                            break;
+                        }
+                        contextConfig.RecentMessageCount = recentCount;
+                        agent.ContextManager.Config.RecentMessageCount = recentCount;
+                        Console.ForegroundColor = ConsoleColor.Green;
+                        Console.WriteLine($"✅ Recent сообщений установлен: {recentCount}");
+                        Console.ResetColor();
+                        Console.WriteLine();
+                        break;
+
+                    case "interval":
+                        if (parts.Length < 3 || !int.TryParse(parts[2], out var interval))
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine("❌ Формат: /context interval <N>. Пример: /context interval 15");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                            break;
+                        }
+                        if (interval < 1)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine("❌ Interval должно быть >= 1");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                            break;
+                        }
+                        contextConfig.SummaryInterval = interval;
+                        agent.ContextManager.Config.SummaryInterval = interval;
+                        Console.ForegroundColor = ConsoleColor.Green;
+                        Console.WriteLine($"✅ Интервал summary установлен: каждые {interval} сообщений");
+                        Console.ResetColor();
+                        Console.WriteLine();
+                        break;
+
+                    case "report":
+                        Console.ForegroundColor = ConsoleColor.Yellow;
+                        Console.WriteLine("📦 Статус управления контекстом:");
+                        Console.ResetColor();
+                        var cmReport = agent.ContextManager;
+                        var cfgReport = cmReport.Config;
+                        Console.WriteLine($"   Включено: {(cfgReport.Enabled ? "да" : "нет")}");
+                        Console.WriteLine($"   Recent: {cfgReport.RecentMessageCount}, Interval: {cfgReport.SummaryInterval}");
+                        Console.WriteLine($"   Summary блоков: {cmReport.SummaryCount}");
+                        Console.WriteLine($"   Всего сообщений: {cmReport.TotalHistoryCount}");
+                        Console.WriteLine();
+
+                        if (agent.Metrics.ContextComparison.ComparisonCount > 0)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Green;
+                            Console.WriteLine("📊 Метрики сжатия:");
+                            Console.ResetColor();
+                            Console.WriteLine(agent.Metrics.ContextComparison.GetReport());
+                        }
+                        else
+                        {
+                            Console.ForegroundColor = ConsoleColor.Gray;
+                            Console.WriteLine("   Пока нет данных (отправьте несколько запросов)");
+                            Console.ResetColor();
+                        }
+                        Console.WriteLine();
+                        break;
+
+                    default:
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine($"❌ Неизвестная команда контекста: {contextCommand}. Доступны: on, off, reset, recent, interval, report");
                         Console.ResetColor();
                         Console.WriteLine();
                         break;

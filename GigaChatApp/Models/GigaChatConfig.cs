@@ -46,4 +46,33 @@ public class GigaChatConfig
     /// Температура генерации. null — без ограничения. Допустимые значения: 0, 0.7, 1.2.
     /// </summary>
     public double? Temperature { get; set; } = null;
+
+    // === Настройки управления контекстом ===
+
+    /// <summary>
+    /// Включено ли управление контекстом (сжатие истории через summary).
+    /// false = полная история без сжатия (baseline для сравнения).
+    /// </summary>
+    public bool ContextCompressionEnabled { get; set; } = false;
+
+    /// <summary>
+    /// Количество последних сообщений, которые хранятся "как есть".
+    /// </summary>
+    public int ContextRecentMessageCount { get; set; } = 10;
+
+    /// <summary>
+    /// Интервал создания summary (каждые N сообщений).
+    /// </summary>
+    public int ContextSummaryInterval { get; set; } = 10;
+
+    /// <summary>
+    /// Максимальное количество summary, которые хранятся.
+    /// </summary>
+    public int ContextMaxSummaries { get; set; } = 20;
+
+    /// <summary>
+    /// Максимальное общее количество токенов для контекста.
+    /// 0 = без ограничения.
+    /// </summary>
+    public int ContextMaxTokens { get; set; } = 0;
 }

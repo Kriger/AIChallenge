@@ -78,6 +78,75 @@ internal class MetricsDto
 
     [JsonPropertyName("totalCompletionTokens")]
     public long TotalCompletionTokens { get; set; }
+
+    [JsonPropertyName("totalContextTokens")]
+    public long TotalContextTokens { get; set; }
+
+    [JsonPropertyName("lastContextTokens")]
+    public long LastContextTokens { get; set; }
+
+    [JsonPropertyName("contextCompressionEnabled")]
+    public bool ContextCompressionEnabled { get; set; }
+
+    [JsonPropertyName("contextComparisonCount")]
+    public int ContextComparisonCount { get; set; }
+
+    [JsonPropertyName("contextTotalOriginalTokens")]
+    public long ContextTotalOriginalTokens { get; set; }
+
+    [JsonPropertyName("contextTotalCompressedTokens")]
+    public long ContextTotalCompressedTokens { get; set; }
+
+    [JsonPropertyName("contextTotalReplacedMessages")]
+    public long ContextTotalReplacedMessages { get; set; }
+
+    [JsonPropertyName("contextTotalSentMessages")]
+    public long ContextTotalSentMessages { get; set; }
+
+    [JsonPropertyName("contextMaxTokenSavings")]
+    public long ContextMaxTokenSavings { get; set; }
+}
+
+/// <summary>
+/// Сериализуемая версия summary блока для JSON.
+/// </summary>
+internal class SummaryBlockDto
+{
+    [JsonPropertyName("blockNumber")]
+    public int BlockNumber { get; set; }
+
+    [JsonPropertyName("timeRange")]
+    public string TimeRange { get; set; } = string.Empty;
+
+    [JsonPropertyName("replacedCount")]
+    public int ReplacedCount { get; set; }
+
+    [JsonPropertyName("summaryText")]
+    public string SummaryText { get; set; } = string.Empty;
+
+    [JsonPropertyName("createdAt")]
+    public DateTime CreatedAt { get; set; }
+}
+
+/// <summary>
+/// Сериализуемая версия конфигурации контекста для JSON.
+/// </summary>
+internal class ContextConfigDto
+{
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; set; }
+
+    [JsonPropertyName("recentMessageCount")]
+    public int RecentMessageCount { get; set; }
+
+    [JsonPropertyName("summaryInterval")]
+    public int SummaryInterval { get; set; }
+
+    [JsonPropertyName("maxSummaries")]
+    public int MaxSummaries { get; set; }
+
+    [JsonPropertyName("maxContextTokens")]
+    public int MaxContextTokens { get; set; }
 }
 
 /// <summary>
@@ -111,6 +180,48 @@ internal class AgentContext
 
     [JsonPropertyName("metrics")]
     public MetricsDto Metrics { get; set; } = new();
+
+    [JsonPropertyName("contextManager")]
+    public ContextManagerDto ContextManager { get; set; } = new();
+}
+
+/// <summary>
+/// Сериализуемая версия ContextManager для JSON.
+/// </summary>
+internal class ContextManagerDto
+{
+    [JsonPropertyName("config")]
+    public ContextConfigDto Config { get; set; } = new();
+
+    [JsonPropertyName("summaries")]
+    public List<SummaryBlockDto> Summaries { get; set; } = new();
+
+    [JsonPropertyName("comparisonMetrics")]
+    public ContextComparisonMetricsDto ComparisonMetrics { get; set; } = new();
+}
+
+/// <summary>
+/// Сериализуемая версия метрик сравнения контекста для JSON.
+/// </summary>
+internal class ContextComparisonMetricsDto
+{
+    [JsonPropertyName("comparisonCount")]
+    public int ComparisonCount { get; set; }
+
+    [JsonPropertyName("totalOriginalTokens")]
+    public long TotalOriginalTokens { get; set; }
+
+    [JsonPropertyName("totalCompressedTokens")]
+    public long TotalCompressedTokens { get; set; }
+
+    [JsonPropertyName("totalReplacedMessages")]
+    public long TotalReplacedMessages { get; set; }
+
+    [JsonPropertyName("totalSentMessages")]
+    public long TotalSentMessages { get; set; }
+
+    [JsonPropertyName("maxTokenSavings")]
+    public long MaxTokenSavings { get; set; }
 }
 
 /// <summary>
@@ -169,6 +280,43 @@ public static class ContextPersistence
                 TotalDurationTicks = agent.Metrics.TotalDuration.Ticks,
                 TotalPromptTokens = agent.Metrics.TotalPromptTokens,
                 TotalCompletionTokens = agent.Metrics.TotalCompletionTokens,
+                TotalContextTokens = agent.Metrics.TotalContextTokens,
+                LastContextTokens = agent.Metrics.LastContextTokens,
+                ContextCompressionEnabled = agent.Metrics.ContextCompressionEnabled,
+                ContextComparisonCount = agent.Metrics.ContextComparison.ComparisonCount,
+                ContextTotalOriginalTokens = agent.Metrics.ContextComparison.TotalOriginalTokens,
+                ContextTotalCompressedTokens = agent.Metrics.ContextComparison.TotalCompressedTokens,
+                ContextTotalReplacedMessages = agent.Metrics.ContextComparison.TotalReplacedMessages,
+                ContextTotalSentMessages = agent.Metrics.ContextComparison.TotalSentMessages,
+                ContextMaxTokenSavings = agent.Metrics.ContextComparison.MaxTokenSavings,
+            },
+            ContextManager = new ContextManagerDto
+            {
+                Config = new ContextConfigDto
+                {
+                    Enabled = agent.ContextManager.Config.Enabled,
+                    RecentMessageCount = agent.ContextManager.Config.RecentMessageCount,
+                    SummaryInterval = agent.ContextManager.Config.SummaryInterval,
+                    MaxSummaries = agent.ContextManager.Config.MaxSummaries,
+                    MaxContextTokens = agent.ContextManager.Config.MaxContextTokens,
+                },
+                Summaries = agent.ContextManager.GetSummaries().Select(s => new SummaryBlockDto
+                {
+                    BlockNumber = s.BlockNumber,
+                    TimeRange = s.TimeRange,
+                    ReplacedCount = s.ReplacedCount,
+                    SummaryText = s.SummaryText,
+                    CreatedAt = s.CreatedAt,
+                }).ToList(),
+                ComparisonMetrics = new ContextComparisonMetricsDto
+                {
+                    ComparisonCount = agent.Metrics.ContextComparison.ComparisonCount,
+                    TotalOriginalTokens = agent.Metrics.ContextComparison.TotalOriginalTokens,
+                    TotalCompressedTokens = agent.Metrics.ContextComparison.TotalCompressedTokens,
+                    TotalReplacedMessages = agent.Metrics.ContextComparison.TotalReplacedMessages,
+                    TotalSentMessages = agent.Metrics.ContextComparison.TotalSentMessages,
+                    MaxTokenSavings = agent.Metrics.ContextComparison.MaxTokenSavings,
+                },
             },
         };
 
@@ -265,6 +413,54 @@ public static class ContextPersistence
 
             agent.Cache.LoadEntries(validEntries);
             agent.Logger.Info($"Восстановлен кэш: {agent.Cache.Count} записей");
+
+            // Восстанавливаем состояние ContextManager
+            if (context.ContextManager is { Config: not null })
+            {
+                var cmConfig = context.ContextManager.Config;
+                agent.ContextManager.Config.Enabled = cmConfig.Enabled;
+                agent.ContextManager.Config.RecentMessageCount = cmConfig.RecentMessageCount;
+                agent.ContextManager.Config.SummaryInterval = cmConfig.SummaryInterval;
+                agent.ContextManager.Config.MaxSummaries = cmConfig.MaxSummaries;
+                agent.ContextManager.Config.MaxContextTokens = cmConfig.MaxContextTokens;
+
+                // Восстанавливаем полную историю (те же сообщения, что и в agent.History)
+                if (context.History.Messages is { Count: > 0 })
+                {
+                    agent.ContextManager.LoadHistory(context.History.Messages);
+                }
+
+                // Восстанавливаем summary блоки
+                if (context.ContextManager.Summaries is { Count: > 0 })
+                {
+                    foreach (var summaryDto in context.ContextManager.Summaries)
+                    {
+                        agent.ContextManager.AddSummaryBlock(new ContextManager.SummaryBlock
+                        {
+                            BlockNumber = summaryDto.BlockNumber,
+                            TimeRange = summaryDto.TimeRange,
+                            ReplacedCount = summaryDto.ReplacedCount,
+                            SummaryText = summaryDto.SummaryText,
+                            CreatedAt = summaryDto.CreatedAt,
+                        });
+                    }
+                    agent.Logger.Info($"Восстановлено {context.ContextManager.Summaries.Count} summary блоков");
+                }
+
+                // Восстанавливаем метрики сравнения
+                var compMetrics = context.ContextManager.ComparisonMetrics;
+                agent.Metrics.ContextComparison = new ContextComparisonMetrics
+                {
+                    ComparisonCount = compMetrics.ComparisonCount,
+                    TotalOriginalTokens = compMetrics.TotalOriginalTokens,
+                    TotalCompressedTokens = compMetrics.TotalCompressedTokens,
+                    TotalReplacedMessages = compMetrics.TotalReplacedMessages,
+                    TotalSentMessages = compMetrics.TotalSentMessages,
+                    MaxTokenSavings = compMetrics.MaxTokenSavings,
+                };
+                agent.Logger.Info($"Восстановлены метрики сравнения: {compMetrics.ComparisonCount} сравнений");
+            }
+
             agent.Logger.Info($"Контекст загружен (сохранён: {context.SavedAt:yyyy-MM-dd HH:mm:ss} UTC)");
 
             return true;

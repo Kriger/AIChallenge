@@ -42,4 +42,33 @@ public class AgentMetrics
     /// <summary>Доля успешных запросов.</summary>
     public double SuccessRate =>
         TotalRequests > 0 ? (double)SuccessfulRequests / TotalRequests : 0;
+
+    // === Метрики управления контекстом ===
+
+    /// <summary>
+    /// Ссылка на метрики сравнения контекста.
+    /// Заполняется ContextManager при сжатии.
+    /// </summary>
+    public ContextComparisonMetrics ContextComparison { get; set; } = new();
+
+    /// <summary>
+    /// Токены, потраченные на контекст (история + summary) за последний запрос.
+    /// </summary>
+    public long LastContextTokens { get; set; }
+
+    /// <summary>
+    /// Общее количество токенов, потраченных на контекст за все запросы.
+    /// </summary>
+    public long TotalContextTokens { get; set; }
+
+    /// <summary>
+    /// True, если управление контекстом включено.
+    /// </summary>
+    public bool ContextCompressionEnabled { get; set; }
+
+    /// <summary>
+    /// Флаг режима сравнения: true = собирать данные для сравнения,
+    /// но не применять сжатие (отправляем полную историю).
+    /// </summary>
+    public bool ComparisonMode { get; set; }
 }

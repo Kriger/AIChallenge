@@ -25,7 +25,8 @@ public class ChatClient
         double? temperature,
         string[]? stopSequences,
         string systemMessage,
-        string accessToken
+        string accessToken,
+        List<Models.ApiMessage>? systemMessages = null
     )
     {
         _httpClient.DefaultRequestHeaders.Authorization =
@@ -33,10 +34,32 @@ public class ChatClient
 
         var messagesList = new List<object>();
 
+        // СЛИВАЕМ все system-сообщения в одно — API GigaChat требует одно system-сообщение
+        var mergedSystemMessage = new StringBuilder();
+
+        // Сначала summary из ContextManager
+        if (systemMessages is { Count: > 0 })
+        {
+            foreach (var msg in systemMessages)
+            {
+                mergedSystemMessage.AppendLine(msg.Content);
+            }
+        }
+
+        // Затем основное системное сообщение
         if (!string.IsNullOrEmpty(systemMessage))
         {
-            messagesList.Add(new { Role = "system", Content = systemMessage });
+            mergedSystemMessage.AppendLine(systemMessage);
         }
+
+        // Добавляем ОДНО слитое system-сообщение (если есть контент)
+        var mergedContent = mergedSystemMessage.ToString().Trim();
+        if (!string.IsNullOrEmpty(mergedContent))
+        {
+            messagesList.Add(new { Role = "system", Content = mergedContent });
+        }
+
+        // Затем user/assistant сообщения
         messagesList.AddRange(messages.Select(m => new { m.Role, m.Content }));
 
         var requestBody = new Dictionary<string, object>

@@ -68,8 +68,12 @@ public class ChatAgent
     /// <summary>Планировщик.</summary>
     public Planner Planner { get; set; } = null!;
 
+    /// <summary>Управление контекстом.</summary>
+    public ContextManager ContextManager { get; }
+
     public ChatAgent(ChatClient httpClient, AuthClient authClient,
-        RequestCache? cache = null, AgentLogger? logger = null, Memory? memory = null, AdaptiveBehavior? adaptive = null, Planner? planner = null)
+        RequestCache? cache = null, AgentLogger? logger = null, Memory? memory = null,
+        AdaptiveBehavior? adaptive = null, Planner? planner = null, ContextManager? contextManager = null)
     {
         _httpClient = httpClient;
         _authClient = authClient;
@@ -79,6 +83,7 @@ public class ChatAgent
         Adaptive = adaptive ?? new AdaptiveBehavior(Metrics, Cache, Logger);
         _planner = planner ?? new Planner(httpClient, authClient, Model, Logger, Memory);
         Planner = _planner;
+        ContextManager = contextManager ?? new ContextManager(httpClient, authClient, Logger);
     }
 
     /// <summary>
@@ -140,7 +145,7 @@ public class ChatAgent
             return planResult;
         }
 
-        // 4. Обычный запрос — отправляем в API
+        // 4. Обычный запрос — отправляем в API с контекстом
         var result = await SendWithRetryAsync(userMessage, relevantFacts);
 
         // 5. Извлекаем новые факты из диалога
@@ -261,11 +266,22 @@ public class ChatAgent
     /// <param name="relevantFacts">Релевантные факты из памяти для контекста.</param>
     private async Task<AgentResult> SendWithRetryAsync(string userMessage, List<Fact> relevantFacts)
     {
-        // Добавляем запрос в историю
+        // Добавляем запрос в полную историю
         _history.Add(new ApiMessage { Role = "user", Content = userMessage });
 
-        // Формируем расширенное системное сообщение с фактами
-        var extendedSystemMessage = BuildExtendedSystemMessage(relevantFacts);
+        // Добавляем в ContextManager
+        ContextManager.AddMessage(new ApiMessage { Role = "user", Content = userMessage });
+
+        // Формируем контекст для отправки
+        var contextResult = ContextManager.BuildContext();
+
+        // Обновляем метрики
+        Metrics.LastContextTokens = contextResult.CompressedTokens;
+        Metrics.TotalContextTokens += contextResult.CompressedTokens;
+        Metrics.ContextCompressionEnabled = ContextManager.Config.Enabled;
+
+        // Формируем расширенное системное сообщение с фактами и summary
+        var extendedSystemMessage = BuildExtendedSystemMessage(relevantFacts, contextResult);
 
         var lastException = default(Exception);
         var retryCount = 0;
@@ -278,20 +294,28 @@ public class ChatAgent
 
                 var apiResponse = await _httpClient.SendCompletionAsync(
                     Model,
-                    _history,
+                    contextResult.RecentMessages,
                     MaxTokens > 0 ? MaxTokens : (int?)null,
                     Temperature,
                     StopSequences,
                     extendedSystemMessage,
-                    token
+                    token,
+                    contextResult.SystemMessages
                 );
+
+                // Добавляем ответ в историю и ContextManager
+                var assistantMessage = new ApiMessage { Role = "assistant", Content = apiResponse.Content };
+                _history.Add(assistantMessage);
+                ContextManager.AddMessage(assistantMessage);
 
                 return new AgentResult
                 {
                     Answer = apiResponse.Content,
                     Duration = apiResponse.Duration,
                     Usage = apiResponse.Usage,
-                    Source = Source.Api
+                    Source = Source.Api,
+                    CurrentRequestTokens = contextResult.CompressedTokens,
+                    HistoryTokens = contextResult.OriginalTokens,
                 };
             }
             catch (Exception ex)
@@ -368,15 +392,25 @@ public class ChatAgent
     }
 
     /// <summary>
-    /// Формирует системное сообщение с релевантными фактами.
+    /// Формирует системное сообщение с релевантными фактами и summary.
     /// </summary>
-    private string BuildExtendedSystemMessage(List<Fact> relevantFacts)
+    private string BuildExtendedSystemMessage(List<Fact> relevantFacts, ContextResult? contextResult = null)
     {
         var sb = new StringBuilder();
 
         if (!string.IsNullOrEmpty(SystemMessage))
         {
             sb.AppendLine(SystemMessage);
+        }
+
+        // Добавляем summary из ContextManager
+        if (contextResult is { IsCompressed: true, SummaryText: not "" })
+        {
+            sb.AppendLine();
+            sb.AppendLine("=== СЖАТАЯ ИСТОРИЯ ДИАЛОГА ===");
+            sb.AppendLine(contextResult.SummaryText);
+            sb.AppendLine($"[Заменено {contextResult.ReplacedMessages} сообщений, отправлено {contextResult.SystemMessages.Count + contextResult.RecentMessages.Count}]");
+            sb.AppendLine("==============================");
         }
 
         if (relevantFacts.Count > 0)
@@ -486,14 +520,15 @@ public class ChatAgent
     }
 
     /// <summary>
-    /// Очищает историю диалога, кэш и память.
+    /// Очищает историю диалога, кэш, память и контекст.
     /// </summary>
     public void ClearHistory()
     {
         _history.Clear();
         Cache.Clear();
         Memory.Clear();
-        Logger.Info("История, кэш и память очищены");
+        ContextManager.Clear();
+        Logger.Info("История, кэш, память и контекст очищены");
     }
 
     /// <summary>
