@@ -1,3 +1,5 @@
+using GigaChatApp.Infrastructure;
+
 namespace GigaChatApp.Models;
 
 /// <summary>
@@ -7,39 +9,41 @@ namespace GigaChatApp.Models;
 public class ContextManagerConfig
 {
     /// <summary>
-    /// Включено ли управление контекстом.
-    /// false = полная история без сжатия (baseline для сравнения).
-    /// true = сжатие с summary.
+    /// Включено ли управление контекстом (legacy-флаг для summary-режима).
     /// </summary>
     public bool Enabled { get; set; } = false;
 
     /// <summary>
     /// Количество последних сообщений, которые хранятся "как есть".
-    /// Эти сообщения отправляются в API без изменений.
+    /// Используется стратегиями SlidingWindow и StickyFacts.
     /// </summary>
     public int RecentMessageCount { get; set; } = 10;
 
     /// <summary>
     /// Интервал создания summary (каждые N сообщений).
-    /// Когда накапливается N сообщений, они заменяются одним summary.
+    /// Используется в legacy summary-режиме.
     /// </summary>
     public int SummaryInterval { get; set; } = 10;
 
     /// <summary>
     /// Максимальное количество summary, которые хранятся.
-    /// Новые summary добавляются в начало, старые удаляются при переполнении.
+    /// Используется в legacy summary-режиме.
     /// </summary>
     public int MaxSummaries { get; set; } = 20;
 
     /// <summary>
     /// Максимальное общее количество токенов для контекста (история + summary).
-    /// 0 = без ограничения. При превышении старые summary удаляются.
+    /// 0 = без ограничения.
     /// </summary>
     public int MaxContextTokens { get; set; } = 0;
 
     /// <summary>
+    /// Стратегия управления контекстом.
+    /// </summary>
+    public ContextStrategy Strategy { get; set; } = ContextStrategy.SlidingWindow;
+
+    /// <summary>
     /// Промпт для генерации summary.
-    /// Используется LLM для создания краткого содержания блока сообщений.
     /// </summary>
     public string SummaryPrompt { get; set; } =
         """
@@ -55,8 +59,7 @@ public class ContextManagerConfig
         """;
 
     /// <summary>
-    /// Заголовок summary, который подставляется в системное сообщение.
-    /// {0} = номер блока, {1} = дата.
+    /// Заголовок summary.
     /// </summary>
     public string SummaryHeader { get; set; } =
         "=== КОНТЕКСТ ИЗ ИСТОРИИ (блок {0}, {1}) ===\n{2}\n=========================================";

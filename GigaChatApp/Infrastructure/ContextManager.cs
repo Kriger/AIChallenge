@@ -4,36 +4,13 @@ using GigaChatApp.Services;
 namespace GigaChatApp.Infrastructure;
 
 /// <summary>
-/// Результат обработки контекста: какие сообщения отправить + summary.
-/// </summary>
-public class ContextResult
-{
-    /// <summary>Сообщения с role="system" (summary блоков).</summary>
-    public List<ApiMessage> SystemMessages { get; set; } = new();
-
-    /// <summary>Сообщения с role="user"/"assistant" (recent сообщения).</summary>
-    public List<ApiMessage> RecentMessages { get; set; } = new();
-
-    /// <summary>Summary текста, который подставляется в системное сообщение.</summary>
-    public string SummaryText { get; set; } = string.Empty;
-
-    /// <summary>Оценка токенов до сжатия (вся история).</summary>
-    public int OriginalTokens { get; set; }
-
-    /// <summary>Оценка токенов после сжатия (recent + summary).</summary>
-    public int CompressedTokens { get; set; }
-
-    /// <summary>Сколько сообщений было заменено на summary.</summary>
-    public int ReplacedMessages { get; set; }
-
-    /// <summary>True, если сжатие было применено.</summary>
-    public bool IsCompressed => ReplacedMessages > 0;
-}
-
-/// <summary>
 /// Сервис управления контекстом диалога.
-/// Хранит последние N сообщений "как есть", остальное заменяет на summary.
-/// Позволяет сравнивать качество ответов до/после сжатия.
+/// Поддерживает три стратегии:
+/// 1. SlidingWindow — только последние N сообщений
+/// 2. StickyFacts — факты + последние N сообщений
+/// 3. Branching — ветвление диалога с checkpoints
+///
+/// Также поддерживает legacy-режим с summary (старая логика).
 /// </summary>
 public class ContextManager
 {
@@ -42,19 +19,25 @@ public class ContextManager
     private readonly AgentLogger _logger;
     private readonly ContextManagerConfig _config;
 
-    /// <summary>Все сообщения истории (неизменяемые).</summary>
+    // Legacy fields для summary-режима
     private readonly List<ApiMessage> _fullHistory = new();
-
-    /// <summary>Сгенерированные summary блоков.</summary>
     private readonly List<SummaryBlock> _summaries = new();
 
-    /// <summary>Метрики сравнения.</summary>
+    // Стратегии
+    private readonly SlidingWindowStrategy? _slidingWindow;
+    private readonly StickyFactsStrategy? _stickyFacts;
+    private readonly BranchingStrategy? _branching;
+
+    /// <summary>Метрики сравнения (для legacy summary-режима).</summary>
     public ContextComparisonMetrics ComparisonMetrics { get; } = new();
 
     /// <summary>Конфигурация.</summary>
     public ContextManagerConfig Config => _config;
 
-    /// <summary>Общее количество сообщений в истории.</summary>
+    /// <summary>Текущая стратегия.</summary>
+    public ContextStrategy CurrentStrategy { get; private set; }
+
+    /// <summary>Общее количество сообщений в истории (legacy).</summary>
     public int TotalHistoryCount => _fullHistory.Count;
 
     /// <summary>Количество recent сообщений.</summary>
@@ -73,36 +56,155 @@ public class ContextManager
         _authClient = authClient;
         _logger = logger;
         _config = config ?? new ContextManagerConfig();
+
+        // Инициализируем все стратегии
+        _slidingWindow = new SlidingWindowStrategy(_config.RecentMessageCount);
+        _stickyFacts = new StickyFactsStrategy(chatClient, authClient, logger, _config.RecentMessageCount);
+        _branching = new BranchingStrategy();
+
+        // По умолчанию — legacy summary-режим (как было раньше)
+        CurrentStrategy = ContextStrategy.SlidingWindow;
+    }
+
+    /// <summary>
+    /// Переключить стратегию управления контекстом.
+    /// </summary>
+    public void SetStrategy(ContextStrategy strategy)
+    {
+        var prev = CurrentStrategy;
+        CurrentStrategy = strategy;
+
+        var strategyName = strategy switch
+        {
+            ContextStrategy.SlidingWindow => "Sliding Window",
+            ContextStrategy.StickyFacts => "Sticky Facts",
+            ContextStrategy.Branching => "Branching",
+            _ => "Unknown"
+        };
+
+        _logger.Info($"Стратегия контекста: {prev} → {strategyName}");
     }
 
     /// <summary>
     /// Добавляет сообщение в историю.
-    /// Если включено сжатие — проверяет, нужно ли создать summary.
+    /// Перенаправляет на активную стратегию.
     /// </summary>
     public void AddMessage(ApiMessage message)
     {
-        _fullHistory.Add(message);
-
-        if (!_config.Enabled)
-            return;
-
-        // Проверяем, пора ли создавать summary
-        var nonSummaryCount = _fullHistory.Count - _summaries.Sum(s => s.ReplacedCount);
-        if (nonSummaryCount >= _config.SummaryInterval)
+        switch (CurrentStrategy)
         {
-            CompressOldMessages();
+            case ContextStrategy.SlidingWindow:
+                _slidingWindow!.AddMessage(message);
+                break;
+            case ContextStrategy.StickyFacts:
+                _stickyFacts!.AddMessage(message);
+                break;
+            case ContextStrategy.Branching:
+                _branching!.AddMessage(message);
+                break;
+            default:
+                // Legacy: добавляем в полную историю
+                _fullHistory.Add(message);
+                break;
         }
     }
 
     /// <summary>
     /// Формирует контекст для отправки в API.
-    /// Возвращает recent сообщения + summary для старых.
+    /// Перенаправляет на активную стратегию.
     /// </summary>
     public ContextResult BuildContext()
     {
+        var result = new ContextResult();
+
+        switch (CurrentStrategy)
+        {
+            case ContextStrategy.SlidingWindow:
+                result = BuildFromSlidingWindow();
+                break;
+            case ContextStrategy.StickyFacts:
+                result = BuildFromStickyFacts();
+                break;
+            case ContextStrategy.Branching:
+                result = BuildFromBranching();
+                break;
+            default:
+                // Legacy: summary-режим
+                result = BuildLegacyContext();
+                break;
+        }
+
+        // Записываем метрики сравнения (для legacy)
+        if (CurrentStrategy != ContextStrategy.SlidingWindow &&
+            CurrentStrategy != ContextStrategy.Branching)
+        {
+            ComparisonMetrics.RecordComparison(
+                result.OriginalTokens,
+                result.CompressedTokens,
+                result.ReplacedMessages,
+                result.SystemMessages.Count + result.RecentMessages.Count);
+        }
+
+        return result;
+    }
+
+    // ==================== Sliding Window ====================
+
+    private ContextResult BuildFromSlidingWindow()
+    {
+        var swResult = _slidingWindow!.BuildContext();
+        return new ContextResult
+        {
+            RecentMessages = swResult.Messages,
+            SystemMessages = swResult.SystemMessages,
+            SummaryText = swResult.SummaryText,
+            OriginalTokens = swResult.OriginalTokens,
+            CompressedTokens = swResult.CompressedTokens,
+            ReplacedMessages = swResult.OriginalTokens - swResult.CompressedTokens,
+            IsCompressed = swResult.IsCompressed,
+        };
+    }
+
+    // ==================== Sticky Facts ====================
+
+    private ContextResult BuildFromStickyFacts()
+    {
+        var sfResult = _stickyFacts!.BuildContext();
+        return new ContextResult
+        {
+            RecentMessages = sfResult.Messages,
+            SystemMessages = sfResult.SystemMessages,
+            SummaryText = sfResult.SummaryText,
+            OriginalTokens = sfResult.OriginalTokens,
+            CompressedTokens = sfResult.CompressedTokens,
+            ReplacedMessages = 0,
+            IsCompressed = sfResult.IsCompressed,
+        };
+    }
+
+    // ==================== Branching ====================
+
+    private ContextResult BuildFromBranching()
+    {
+        var brResult = _branching!.BuildContext();
+        return new ContextResult
+        {
+            RecentMessages = brResult.Messages,
+            SystemMessages = brResult.SystemMessages,
+            SummaryText = brResult.SummaryText,
+            OriginalTokens = brResult.OriginalTokens,
+            CompressedTokens = brResult.CompressedTokens,
+            ReplacedMessages = 0,
+            IsCompressed = brResult.IsCompressed,
+        };
+    }
+
+    // ==================== Legacy Summary Mode ====================
+
+    private ContextResult BuildLegacyContext()
+    {
         if (!_config.Enabled || _summaries.Count == 0)
         {
-            // Нет сжатия — возвращаем полную историю (все user/assistant)
             var tokens = TokenEstimator.EstimateHistoryTokens(_fullHistory);
             return new ContextResult
             {
@@ -112,17 +214,11 @@ public class ContextManager
             };
         }
 
-        // Считаем, сколько сообщений — это "recent"
         var recentCount = Math.Min(_config.RecentMessageCount, _fullHistory.Count);
-
-        // Находим, где заканчивается recent-зона
         var recentMessages = _fullHistory.Skip(_fullHistory.Count - recentCount).ToList();
         var compressedMessages = _fullHistory.Take(_fullHistory.Count - recentCount).ToList();
 
-        // Формируем summary текст
         var summaryText = BuildSummaryText();
-
-        // Собираем summary как system-сообщения
         var systemMessages = new List<ApiMessage>();
         foreach (var summary in _summaries)
         {
@@ -133,11 +229,10 @@ public class ContextManager
             });
         }
 
-        // Считаем токены
         var originalTokens = TokenEstimator.EstimateHistoryTokens(_fullHistory);
         var compressedTokens = TokenEstimator.EstimateHistoryTokens(recentMessages);
 
-        var result = new ContextResult
+        return new ContextResult
         {
             SystemMessages = systemMessages,
             RecentMessages = recentMessages,
@@ -146,35 +241,28 @@ public class ContextManager
             CompressedTokens = compressedTokens,
             ReplacedMessages = compressedMessages.Count,
         };
-
-        // Записываем метрики сравнения
-        ComparisonMetrics.RecordComparison(
-            originalTokens,
-            compressedTokens,
-            compressedMessages.Count,
-            systemMessages.Count + recentMessages.Count);
-
-        _logger.Info($"Контекст: {originalTokens} → {compressedTokens} токенов " +
-                     $"(заменено {compressedMessages.Count} сообщений, " +
-                     $"{systemMessages.Count} summary + {recentMessages.Count} recent отправлено)");
-
-        return result;
     }
 
+    private string BuildSummaryText()
+    {
+        if (_summaries.Count == 0)
+            return string.Empty;
+        return string.Join("\n\n", _summaries.Select(s => s.SummaryText));
+    }
+
+    // ==================== Legacy Summary Compression ====================
+
     /// <summary>
-    /// Генерирует summary для старых сообщений через LLM.
-    /// Имеет retry-логику для обработки TooManyRequests.
+    /// Генерирует summary для старых сообщений через LLM (legacy-режим).
     /// </summary>
-    private async void CompressOldMessages()
+    public async Task CompressOldMessagesAsync()
     {
         try
         {
-            // Небольшая задержка, чтобы не перегружать API
             await Task.Delay(500);
 
             var token = await _authClient.GetAccessTokenAsync();
 
-            // Находим сообщения, которые нужно сжать
             var recentCount = Math.Min(_config.RecentMessageCount, _fullHistory.Count);
             var messagesToCompress = _fullHistory
                 .Take(_fullHistory.Count - recentCount)
@@ -184,7 +272,6 @@ public class ContextManager
             if (messagesToCompress.Count == 0)
                 return;
 
-            // Формируем текст диалога
             var dialogueText = string.Join("\n", messagesToCompress.Select(m =>
                 $"{(m.Role == "user" ? "Пользователь" : "Ассистент")}: {m.Content}"));
 
@@ -203,9 +290,8 @@ public class ContextManager
                 ["temperature"] = 0.1,
             };
 
-            // Retry-логика для обработки TooManyRequests
             var maxRetries = 3;
-            var retryDelay = 1000; // мс
+            var retryDelay = 1000;
             Exception? lastException = null;
 
             for (var attempt = 0; attempt <= maxRetries; attempt++)
@@ -233,7 +319,6 @@ public class ContextManager
                         if (string.IsNullOrWhiteSpace(summaryContent))
                             return;
 
-                        // Формируем summary блок
                         var blockNumber = _summaries.Count + 1;
                         var timeRange = $"{messagesToCompress.First().Role} → {messagesToCompress.Last().Role} " +
                                        $"({messagesToCompress.Count} сообщений)";
@@ -253,7 +338,6 @@ public class ContextManager
 
                         _summaries.Add(summaryBlock);
 
-                        // Ограничиваем количество summary
                         while (_summaries.Count > _config.MaxSummaries)
                         {
                             _summaries.RemoveAt(0);
@@ -262,15 +346,14 @@ public class ContextManager
 
                         _logger.Info($"Summary создан: блок {blockNumber}, " +
                                     $"заменено {messagesToCompress.Count} сообщений");
-                        return; // Успех — выходим
+                        return;
                     }
 
-                    // Проверяем, стоит ли retry
                     if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests && attempt < maxRetries)
                     {
-                        _logger.Warning($"Summary: TooManyRequests, повтор через {retryDelay} мс (попытка {attempt + 1})");
+                        _logger.Warning($"Summary: TooManyRequests, повтор через {retryDelay} мс");
                         await Task.Delay(retryDelay);
-                        retryDelay *= 2; // Экспоненциальная задержка
+                        retryDelay *= 2;
                     }
                     else
                     {
@@ -290,7 +373,6 @@ public class ContextManager
                 }
             }
 
-            // Все попытки исчерпаны
             if (lastException != null)
             {
                 _logger.Error($"Ошибка генерации summary после {maxRetries} попыток: {lastException.Message}");
@@ -302,16 +384,7 @@ public class ContextManager
         }
     }
 
-    /// <summary>
-    /// Формирует объединённый текст всех summary.
-    /// </summary>
-    private string BuildSummaryText()
-    {
-        if (_summaries.Count == 0)
-            return string.Empty;
-
-        return string.Join("\n\n", _summaries.Select(s => s.SummaryText));
-    }
+    // ==================== Common Operations ====================
 
     /// <summary>
     /// Очищает историю и summary.
@@ -320,6 +393,9 @@ public class ContextManager
     {
         _fullHistory.Clear();
         _summaries.Clear();
+        _slidingWindow?.Clear();
+        _stickyFacts?.Clear();
+        _branching?.Clear();
         _logger.Info("Контекст очищен");
     }
 
@@ -333,6 +409,20 @@ public class ContextManager
         {
             _fullHistory.Add(msg);
         }
+
+        switch (CurrentStrategy)
+        {
+            case ContextStrategy.SlidingWindow:
+                _slidingWindow!.LoadHistory(messages);
+                break;
+            case ContextStrategy.StickyFacts:
+                _stickyFacts!.LoadHistory(messages);
+                break;
+            case ContextStrategy.Branching:
+                _branching!.LoadHistory(messages);
+                break;
+        }
+
         _logger.Info($"Загружено {messages.Count()} сообщений истории");
     }
 
@@ -350,13 +440,44 @@ public class ContextManager
     }
 
     /// <summary>
-    /// Переключает режим сжатия.
+    /// Переключает режим сжатия (legacy).
     /// </summary>
     public void ToggleCompression()
     {
         _config.Enabled = !_config.Enabled;
         var status = _config.Enabled ? "включено" : "выключено";
         _logger.Info($"Управление контекстом: {status}");
+    }
+
+    // ==================== Strategy-Specific Accessors ====================
+
+    /// <summary>
+    /// Получить SlidingWindowStrategy для прямого доступа.
+    /// </summary>
+    public SlidingWindowStrategy? SlidingWindow => _slidingWindow;
+
+    /// <summary>
+    /// Получить StickyFactsStrategy для прямого доступа.
+    /// </summary>
+    public StickyFactsStrategy? StickyFacts => _stickyFacts;
+
+    /// <summary>
+    /// Получить BranchingStrategy для прямого доступа.
+    /// </summary>
+    public BranchingStrategy? Branching => _branching;
+
+    /// <summary>
+    /// Получить статус активной стратегии.
+    /// </summary>
+    public string GetStrategyStatus()
+    {
+        return CurrentStrategy switch
+        {
+            ContextStrategy.SlidingWindow => _slidingWindow?.GetStatus() ?? "",
+            ContextStrategy.StickyFacts => _stickyFacts?.GetStatus() ?? "",
+            ContextStrategy.Branching => _branching?.GetStatus() ?? "",
+            _ => "Неизвестная стратегия",
+        };
     }
 
     /// <summary>

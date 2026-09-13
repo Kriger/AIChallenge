@@ -147,6 +147,108 @@ internal class ContextConfigDto
 
     [JsonPropertyName("maxContextTokens")]
     public int MaxContextTokens { get; set; }
+
+    [JsonPropertyName("strategy")]
+    public string Strategy { get; set; } = "SlidingWindow";
+}
+
+/// <summary>
+/// Сериализуемая версия ветки диалога для JSON.
+/// </summary>
+internal class DialogueBranchDto
+{
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = string.Empty;
+
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+
+    [JsonPropertyName("messages")]
+    public List<ApiMessage> Messages { get; set; } = new();
+
+    [JsonPropertyName("createdAt")]
+    public DateTime CreatedAt { get; set; }
+
+    [JsonPropertyName("lastModified")]
+    public DateTime LastModified { get; set; }
+
+    [JsonPropertyName("isMain")]
+    public bool IsMain { get; set; }
+}
+
+/// <summary>
+/// Сериализуемая версия чекпоинта для JSON.
+/// </summary>
+internal class BranchCheckpointDto
+{
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = string.Empty;
+
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+
+    [JsonPropertyName("messageIndex")]
+    public int MessageIndex { get; set; }
+
+    [JsonPropertyName("branchId")]
+    public string BranchId { get; set; } = string.Empty;
+
+    [JsonPropertyName("createdAt")]
+    public DateTime CreatedAt { get; set; }
+
+    [JsonPropertyName("messageCount")]
+    public int MessageCount { get; set; }
+}
+
+/// <summary>
+/// Сериализуемая версия фактов StickyFacts для JSON.
+/// </summary>
+internal class StickyFactsDto
+{
+    [JsonPropertyName("facts")]
+    public Dictionary<string, string> Facts { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    [JsonPropertyName("totalAdded")]
+    public int TotalAdded { get; set; }
+
+    [JsonPropertyName("factsUpdateCount")]
+    public int FactsUpdateCount { get; set; }
+}
+
+/// <summary>
+/// Сериализуемая версия SlidingWindow для JSON.
+/// </summary>
+internal class SlidingWindowDto
+{
+    [JsonPropertyName("windowSize")]
+    public int WindowSize { get; set; }
+
+    [JsonPropertyName("totalAdded")]
+    public int TotalAdded { get; set; }
+
+    [JsonPropertyName("droppedCount")]
+    public int DroppedCount { get; set; }
+}
+
+/// <summary>
+/// Сериализуемая версия Branching для JSON.
+/// </summary>
+internal class BranchingDto
+{
+    [JsonPropertyName("activeBranchId")]
+    public string ActiveBranchId { get; set; } = string.Empty;
+
+    [JsonPropertyName("branches")]
+    public List<DialogueBranchDto> Branches { get; set; } = new();
+
+    [JsonPropertyName("checkpoints")]
+    public List<BranchCheckpointDto> Checkpoints { get; set; } = new();
+
+    [JsonPropertyName("branchCounter")]
+    public int BranchCounter { get; set; }
+
+    [JsonPropertyName("checkpointCounter")]
+    public int CheckpointCounter { get; set; }
 }
 
 /// <summary>
@@ -198,6 +300,15 @@ internal class ContextManagerDto
 
     [JsonPropertyName("comparisonMetrics")]
     public ContextComparisonMetricsDto ComparisonMetrics { get; set; } = new();
+
+    [JsonPropertyName("slidingWindow")]
+    public SlidingWindowDto? SlidingWindow { get; set; }
+
+    [JsonPropertyName("stickyFacts")]
+    public StickyFactsDto? StickyFacts { get; set; }
+
+    [JsonPropertyName("branching")]
+    public BranchingDto? Branching { get; set; }
 }
 
 /// <summary>
@@ -299,6 +410,7 @@ public static class ContextPersistence
                     SummaryInterval = agent.ContextManager.Config.SummaryInterval,
                     MaxSummaries = agent.ContextManager.Config.MaxSummaries,
                     MaxContextTokens = agent.ContextManager.Config.MaxContextTokens,
+                    Strategy = agent.ContextManager.Config.Strategy.ToString(),
                 },
                 Summaries = agent.ContextManager.GetSummaries().Select(s => new SummaryBlockDto
                 {
@@ -317,6 +429,42 @@ public static class ContextPersistence
                     TotalSentMessages = agent.Metrics.ContextComparison.TotalSentMessages,
                     MaxTokenSavings = agent.Metrics.ContextComparison.MaxTokenSavings,
                 },
+                SlidingWindow = agent.ContextManager.SlidingWindow is { } sw ? new SlidingWindowDto
+                {
+                    WindowSize = 10, // window size is config-dependent
+                    TotalAdded = sw.TotalAdded,
+                    DroppedCount = sw.DroppedCount,
+                } : null,
+                StickyFacts = agent.ContextManager.StickyFacts is { } sf ? new StickyFactsDto
+                {
+                    Facts = sf.Facts.ToDictionary(k => k.Key, v => v.Value),
+                    TotalAdded = sf.TotalAdded,
+                    FactsUpdateCount = sf.FactsUpdateCount,
+                } : null,
+                Branching = agent.ContextManager.Branching is { } br ? new BranchingDto
+                {
+                    ActiveBranchId = br.ActiveBranchId,
+                    Branches = br.GetAllBranches().Select(b => new DialogueBranchDto
+                    {
+                        Id = b.Id,
+                        Name = b.Name,
+                        Messages = b.Messages,
+                        CreatedAt = b.CreatedAt,
+                        LastModified = b.LastModified,
+                        IsMain = b.IsMain,
+                    }).ToList(),
+                    Checkpoints = br.GetAllCheckpoints().Select(cp => new BranchCheckpointDto
+                    {
+                        Id = cp.Id,
+                        Name = cp.Name,
+                        MessageIndex = cp.MessageIndex,
+                        BranchId = cp.BranchId,
+                        CreatedAt = cp.CreatedAt,
+                        MessageCount = cp.MessageCount,
+                    }).ToList(),
+                    BranchCounter = 0,
+                    CheckpointCounter = 0,
+                } : null,
             },
         };
 
@@ -424,6 +572,13 @@ public static class ContextPersistence
                 agent.ContextManager.Config.MaxSummaries = cmConfig.MaxSummaries;
                 agent.ContextManager.Config.MaxContextTokens = cmConfig.MaxContextTokens;
 
+                // Восстанавливаем стратегию
+                if (Enum.TryParse(cmConfig.Strategy, ignoreCase: true, out ContextStrategy strategy))
+                {
+                    agent.ContextManager.SetStrategy(strategy);
+                    agent.Logger.Info($"Восстановлена стратегия контекста: {strategy}");
+                }
+
                 // Восстанавливаем полную историю (те же сообщения, что и в agent.History)
                 if (context.History.Messages is { Count: > 0 })
                 {
@@ -459,6 +614,69 @@ public static class ContextPersistence
                     MaxTokenSavings = compMetrics.MaxTokenSavings,
                 };
                 agent.Logger.Info($"Восстановлены метрики сравнения: {compMetrics.ComparisonCount} сравнений");
+
+                // Восстанавливаем Branching (ветки и чекпоинты)
+                if (context.ContextManager.Branching is { Branches: not null } branchingDto)
+                {
+                    var branching = agent.ContextManager.Branching;
+                    if (branching is not null)
+                    {
+                        // Очищаем текущие ветки и чекпоинты
+                        branching.Clear();
+
+                        // Восстанавливаем ветки
+                        foreach (var branchDto in branchingDto.Branches)
+                        {
+                            var branch = new DialogueBranch
+                            {
+                                Id = branchDto.Id,
+                                Name = branchDto.Name,
+                                Messages = branchDto.Messages,
+                                CreatedAt = branchDto.CreatedAt,
+                                LastModified = branchDto.LastModified,
+                                IsMain = branchDto.IsMain,
+                            };
+                            branching.AddBranchInternal(branch);
+                        }
+
+                        // Восстанавливаем чекпоинты
+                        foreach (var cpDto in branchingDto.Checkpoints)
+                        {
+                            var cp = new BranchCheckpoint
+                            {
+                                Id = cpDto.Id,
+                                Name = cpDto.Name,
+                                MessageIndex = cpDto.MessageIndex,
+                                BranchId = cpDto.BranchId,
+                                CreatedAt = cpDto.CreatedAt,
+                                MessageCount = cpDto.MessageCount,
+                            };
+                            branching.AddCheckpointInternal(cp);
+                        }
+
+                        // Восстанавливаем активную ветку
+                        if (!string.IsNullOrEmpty(branchingDto.ActiveBranchId))
+                        {
+                            branching.ActiveBranchId = branchingDto.ActiveBranchId;
+                        }
+
+                        agent.Logger.Info($"Восстановлено {branchingDto.Branches.Count} веток и {branchingDto.Checkpoints.Count} чекпоинтов");
+                    }
+                }
+
+                // Восстанавливаем StickyFacts
+                if (context.ContextManager.StickyFacts is { Facts: not null } factsDto)
+                {
+                    var stickyFacts = agent.ContextManager.StickyFacts;
+                    if (stickyFacts is not null)
+                    {
+                        foreach (var kvp in factsDto.Facts)
+                        {
+                            stickyFacts.SaveFact(kvp.Key, kvp.Value);
+                        }
+                        agent.Logger.Info($"Восстановлено {factsDto.Facts.Count} фактов StickyFacts");
+                    }
+                }
             }
 
             agent.Logger.Info($"Контекст загружен (сохранён: {context.SavedAt:yyyy-MM-dd HH:mm:ss} UTC)");

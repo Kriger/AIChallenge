@@ -2,10 +2,12 @@ namespace GigaChatApp.Infrastructure;
 
 /// <summary>
 /// Логгер агента — запись событий с уровнями и цветовой разметкой.
+/// Поддерживает буферизацию для вывода после ответа бота.
 /// </summary>
 public class AgentLogger
 {
     private LogLevel _minLevel;
+    private readonly List<string> _bufferedMessages = new();
 
     public AgentLogger(LogLevel minLevel = LogLevel.Info)
     {
@@ -20,13 +22,43 @@ public class AgentLogger
         _minLevel = level;
     }
 
+    /// <summary>
+    /// Получить и очистить буферизованные сообщения.
+    /// </summary>
+    public List<string> FlushBuffer()
+    {
+        var messages = _bufferedMessages.ToList();
+        _bufferedMessages.Clear();
+        return messages;
+    }
+
+    /// <summary>
+    /// Вывести буферизованные сообщения в консоль с цветами.
+    /// </summary>
+    public static void PrintBufferedMessages(IEnumerable<string> messages)
+    {
+        foreach (var msg in messages)
+        {
+            var parts = msg.Split('\n', 2, StringSplitOptions.TrimEntries);
+            if (parts.Length == 2)
+            {
+                Console.ForegroundColor = ConsoleColor.DarkGray;
+                Console.WriteLine(parts[0]);
+                Console.ResetColor();
+                Console.WriteLine(parts[1]);
+            }
+            else
+            {
+                Console.WriteLine(msg);
+            }
+        }
+    }
+
     public void Log(LogLevel level, string message)
     {
         if (level < _minLevel)
             return;
 
-        Console.WriteLine();
-        
         var timestamp = DateTime.Now.ToString("HH:mm:ss.fff");
         var color = level switch
         {
@@ -37,13 +69,15 @@ public class AgentLogger
             _ => ConsoleColor.White
         };
 
-        Console.ForegroundColor = ConsoleColor.DarkGray;
-        Console.WriteLine($"[{timestamp}] [AGENT LOG]");
-        Console.ResetColor();
+        var formatted = $"{timestamp} [AGENT LOG]";
+        if (level >= LogLevel.Warning)
+        {
+            formatted += $" [{level}]";
+        }
+        formatted += $"\n   {message}";
 
-        Console.ForegroundColor = color;
-        Console.WriteLine($"   {message}");
-        Console.ResetColor();
+        // Буферизуем для вывода после ответа
+        _bufferedMessages.Add(formatted);
     }
 
     public void Debug(string message) => Log(LogLevel.Debug, message);

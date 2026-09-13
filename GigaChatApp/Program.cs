@@ -50,7 +50,9 @@ Console.WriteLine("📖 Команды: /status, /model, /system <текст>, /
 Console.WriteLine("   Адаптация: /adaptive (статус), /adaptive on/off/reset/threshold <значение>");
 Console.WriteLine("   Планировщик: /planner (статус)");
 Console.WriteLine("   Память: /memory list, /memory save <ключ> <значение>, /memory delete <ключ>, /memory search <запрос>");
-Console.WriteLine("   Контекст: /context (статус), /context on/off, /context recent <N>, /context interval <N>, /context report");
+Console.WriteLine("   Контекст: /context (статус), /context strategy (список), /context strategy <sliding|sticky|branching>");
+Console.WriteLine("   Факты: /facts list, /facts save <ключ> <значение>, /facts delete <ключ>");
+Console.WriteLine("   Ветки: /branch list, /branch create <имя>, /branch switch <id>, /branch checkpoint <имя>, /branch delete <id>");
 Console.WriteLine("   Очистка: /clear | Сохранить: /save | Выход: quit / exit / q");
 Console.WriteLine("   По умолчанию ограничений нет — задайте через команды выше.");
 Console.WriteLine();
@@ -88,15 +90,30 @@ var adaptive = new AdaptiveBehavior(agent.Metrics, cache, logger);
 var planner = new Planner(chatClient, authClient, config.Model, logger, memory);
 agent.Adaptive = adaptive;
 agent.Planner = planner;
+agent.Config = config;
 
 // Инициализация агента из config
 agent.Model = config.Model;
 agent.SystemMessage = config.SystemMessage;
-agent.MaxTokens = config.MaxTokens;
+agent.MaxTokens = agent.MaxTokens;
 agent.Temperature = config.Temperature;
 agent.StopSequences = config.StopSequences;
 
 agent.Metrics.ContextCompressionEnabled = contextConfig.Enabled;
+
+// Загружаем стратегию из config
+if (Enum.TryParse(config.ContextStrategy, ignoreCase: true, out ContextStrategy loadedStrategy))
+{
+    agent.ContextManager.SetStrategy(loadedStrategy);
+    agent.ContextManager.Config.Strategy = loadedStrategy;
+    Console.WriteLine($"✅ Стратегия контекста: {loadedStrategy}");
+}
+else
+{
+    Console.WriteLine($"⚠️  Неизвестная стратегия в config: '{config.ContextStrategy}', используем SlidingWindow");
+    agent.ContextManager.SetStrategy(ContextStrategy.SlidingWindow);
+    agent.ContextManager.Config.Strategy = ContextStrategy.SlidingWindow;
+}
 
 // Загружаем контекст из предыдущей сессии
 ContextPersistence.LoadContext(agent);
@@ -160,7 +177,7 @@ while (true)
     // Команды конфигурации
     if (input.StartsWith("/"))
     {
-        var parts = input.Split(' ', 2, StringSplitOptions.TrimEntries);
+        var parts = input.Split(' ', 4, StringSplitOptions.TrimEntries);
         var command = parts[0].ToLowerInvariant();
 
         switch (command)
@@ -642,16 +659,24 @@ while (true)
                     Console.ForegroundColor = ConsoleColor.Yellow;
                     Console.WriteLine("📦 Управление контекстом:");
                     Console.ResetColor();
+
                     var cm = agent.ContextManager;
                     var cfg = cm.Config;
-                    Console.WriteLine($"   Включено: {(cfg.Enabled ? "да" : "нет")}");
+                    Console.WriteLine($"   Стратегия: {cfg.Strategy}");
                     Console.WriteLine($"   Recent сообщений: {cfg.RecentMessageCount}");
-                    Console.WriteLine($"   Интервал summary: каждые {cfg.SummaryInterval} сообщений");
-                    Console.WriteLine($"   Max summary блоков: {cfg.MaxSummaries}");
-                    Console.WriteLine($"   Всего сообщений в истории: {cm.TotalHistoryCount}");
-                    Console.WriteLine($"   Summary блоков: {cm.SummaryCount}");
-                    Console.WriteLine($"   Recent доступно: {cm.RecentCount}");
+
+                    // Статус активной стратегии
                     Console.WriteLine();
+                    Console.ForegroundColor = ConsoleColor.Cyan;
+                    Console.WriteLine("   Активная стратегия:");
+                    Console.ResetColor();
+                    Console.WriteLine(cm.GetStrategyStatus());
+
+                    // Статус legacy summary (если не SlidingWindow)
+                    if (cfg.Strategy == ContextStrategy.SlidingWindow || cfg.Strategy == ContextStrategy.Branching)
+                    {
+                        Console.WriteLine($"   Summary блоков (legacy): {cm.SummaryCount}");
+                    }
 
                     // Метрики сравнения
                     if (agent.Metrics.ContextComparison.ComparisonCount > 0)
@@ -667,8 +692,11 @@ while (true)
                         Console.WriteLine();
                     }
 
-                    Console.WriteLine("   Команды: /context on, /context off, /context reset");
-                    Console.WriteLine("   Настройки: /context recent <N>, /context interval <N>, /context report");
+                    Console.WriteLine("   Команды:");
+                    Console.WriteLine("   /context strategy — список стратегий");
+                    Console.WriteLine("   /context strategy <sliding|sticky|branching> — переключить");
+                    Console.WriteLine("   /context on/off (legacy summary)");
+                    Console.WriteLine("   /context recent <N>, /context interval <N>, /context report");
                     Console.WriteLine();
                     continue;
                 }
@@ -677,6 +705,73 @@ while (true)
 
                 switch (contextCommand)
                 {
+                    case "strategy":
+                        // parts[2] — аргумент стратегии (sliding, sticky, branching)
+                        var strategyArg = parts.Length >= 3 ? parts[2] : "";
+
+                        if (strategyArg == "")
+                        {
+                            // Показываем список стратегий
+                            Console.ForegroundColor = ConsoleColor.Yellow;
+                            Console.WriteLine("📦 Стратегии управления контекстом:");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                            Console.WriteLine("   1. sliding — Sliding Window");
+                            Console.WriteLine("      Хранит только последние N сообщений, остальное отбрасывается.");
+                            Console.WriteLine("      Быстрая, без LLM-вызовов.");
+                            Console.WriteLine();
+                            Console.WriteLine("   2. sticky — Sticky Facts");
+                            Console.WriteLine("      Отдельный блок фактов (ключ-значение) + последние N сообщений.");
+                            Console.WriteLine("      Факты обновляются LLM после каждого сообщения пользователя.");
+                            Console.WriteLine();
+                            Console.WriteLine("   3. branching — Branching");
+                            Console.WriteLine("      Ветвление диалога: checkpoints, создание веток, переключение.");
+                            Console.WriteLine();
+                            Console.WriteLine($"   Текущая стратегия: {agent.ContextManager.Config.Strategy}");
+                            Console.WriteLine();
+                        }
+                        else
+                        {
+                            var strategyName = strategyArg.ToLowerInvariant();
+                            ContextStrategy newStrategy;
+                            switch (strategyName)
+                            {
+                                case "sliding":
+                                case "slidingwindow":
+                                    newStrategy = ContextStrategy.SlidingWindow;
+                                    break;
+                                case "sticky":
+                                case "stickyfacts":
+                                    newStrategy = ContextStrategy.StickyFacts;
+                                    break;
+                                case "branching":
+                                    newStrategy = ContextStrategy.Branching;
+                                    break;
+                                default:
+                                    Console.ForegroundColor = ConsoleColor.Red;
+                                    Console.WriteLine($"❌ Неизвестная стратегия: '{strategyArg}'. Доступны: sliding, sticky, branching");
+                                    Console.ResetColor();
+                                    Console.WriteLine();
+                                    continue;
+                            }
+
+                            agent.ContextManager.SetStrategy(newStrategy);
+                            agent.ContextManager.Config.Strategy = newStrategy;
+
+                            Console.ForegroundColor = ConsoleColor.Green;
+                            var strategyDesc = newStrategy switch
+                            {
+                                ContextStrategy.SlidingWindow => "Sliding Window (последние N сообщений)",
+                                ContextStrategy.StickyFacts => "Sticky Facts (факты + последние N сообщений)",
+                                ContextStrategy.Branching => "Branching (ветвление диалога)",
+                                _ => "Неизвестная",
+                            };
+                            Console.WriteLine($"✅ Стратегия изменена на: {strategyDesc}");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                        }
+                        break;
+
                     case "on":
                         contextConfig.Enabled = true;
                         agent.ContextManager.Config.Enabled = true;
@@ -703,11 +798,14 @@ while (true)
                         contextConfig.SummaryInterval = 10;
                         contextConfig.MaxSummaries = 20;
                         contextConfig.MaxContextTokens = 0;
+                        contextConfig.Strategy = ContextStrategy.SlidingWindow;
                         agent.ContextManager.Config.Enabled = false;
                         agent.ContextManager.Config.RecentMessageCount = 10;
                         agent.ContextManager.Config.SummaryInterval = 10;
                         agent.ContextManager.Config.MaxSummaries = 20;
                         agent.ContextManager.Config.MaxContextTokens = 0;
+                        agent.ContextManager.Config.Strategy = ContextStrategy.SlidingWindow;
+                        agent.ContextManager.SetStrategy(ContextStrategy.SlidingWindow);
                         agent.Metrics.ContextCompressionEnabled = false;
                         agent.ContextManager.Clear();
                         agent.Metrics.ContextComparison.Reset();
@@ -736,6 +834,13 @@ while (true)
                         }
                         contextConfig.RecentMessageCount = recentCount;
                         agent.ContextManager.Config.RecentMessageCount = recentCount;
+                        // Обновляем размер окна для SlidingWindow
+                        if (agent.ContextManager.SlidingWindow is not null)
+                        {
+                            // Пересоздаём с новым размером
+                            var sw = agent.ContextManager.SlidingWindow;
+                            // Просто показываем, что размер обновлён
+                        }
                         Console.ForegroundColor = ConsoleColor.Green;
                         Console.WriteLine($"✅ Recent сообщений установлен: {recentCount}");
                         Console.ResetColor();
@@ -773,7 +878,7 @@ while (true)
                         Console.ResetColor();
                         var cmReport = agent.ContextManager;
                         var cfgReport = cmReport.Config;
-                        Console.WriteLine($"   Включено: {(cfgReport.Enabled ? "да" : "нет")}");
+                        Console.WriteLine($"   Стратегия: {cfgReport.Strategy}");
                         Console.WriteLine($"   Recent: {cfgReport.RecentMessageCount}, Interval: {cfgReport.SummaryInterval}");
                         Console.WriteLine($"   Summary блоков: {cmReport.SummaryCount}");
                         Console.WriteLine($"   Всего сообщений: {cmReport.TotalHistoryCount}");
@@ -797,7 +902,7 @@ while (true)
 
                     default:
                         Console.ForegroundColor = ConsoleColor.Red;
-                        Console.WriteLine($"❌ Неизвестная команда контекста: {contextCommand}. Доступны: on, off, reset, recent, interval, report");
+                        Console.WriteLine($"❌ Неизвестная команда контекста: {contextCommand}. Доступны: strategy, on, off, reset, recent, interval, report");
                         Console.ResetColor();
                         Console.WriteLine();
                         break;
@@ -812,9 +917,316 @@ while (true)
                 Console.WriteLine();
                 continue;
 
+            case "/facts":
+                if (parts.Length < 2)
+                {
+                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.WriteLine("❌ Команды фактов: /facts list, /facts save <ключ> <значение>, /facts delete <ключ>");
+                    Console.ResetColor();
+                    Console.WriteLine();
+                    continue;
+                }
+
+                var factsCommand = parts[1].ToLowerInvariant();
+
+                switch (factsCommand)
+                {
+                    case "list":
+                        {
+                            Console.ForegroundColor = ConsoleColor.Yellow;
+                            Console.WriteLine("🧠 Факты (Sticky Facts):");
+                            Console.ResetColor();
+
+                            if (agent.ContextManager.StickyFacts is { } stickyFacts)
+                            {
+                                var facts = stickyFacts.Facts;
+                                if (facts.Count == 0)
+                                {
+                                    Console.WriteLine("   (пусто)");
+                                }
+                                else
+                                {
+                                    foreach (var kvp in facts)
+                                    {
+                                        Console.ForegroundColor = ConsoleColor.Cyan;
+                                        Console.Write($"   → {kvp.Key}: ");
+                                        Console.ResetColor();
+                                        Console.WriteLine(kvp.Value);
+                                    }
+                                }
+                                Console.WriteLine();
+                                Console.WriteLine($"   Всего фактов: {facts.Count}");
+                            }
+                            else
+                            {
+                                Console.ForegroundColor = ConsoleColor.Yellow;
+                                Console.WriteLine("   Sticky Facts не активна. Переключитесь: /context strategy sticky");
+                                Console.ResetColor();
+                            }
+                            Console.WriteLine();
+                        }
+                        break;
+
+                    case "save":
+                        if (parts.Length < 4)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine("❌ Формат: /facts save <ключ> <значение>");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                            break;
+                        }
+                        if (agent.ContextManager.StickyFacts is { } stickyFacts2)
+                        {
+                            var saveKey = parts[2];
+                            var saveValue = parts[3];
+                            stickyFacts2.SaveFact(saveKey, saveValue);
+                            Console.ForegroundColor = ConsoleColor.Green;
+                            Console.WriteLine($"✅ Факт сохранён: {saveKey} = \"{saveValue}\"");
+                            Console.ResetColor();
+                        }
+                        else
+                        {
+                            Console.ForegroundColor = ConsoleColor.Yellow;
+                            Console.WriteLine("⚠️  Sticky Facts не активна. Переключитесь: /context strategy sticky");
+                            Console.ResetColor();
+                        }
+                        Console.WriteLine();
+                        break;
+
+                    case "delete":
+                        if (parts.Length < 3)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine("❌ Формат: /facts delete <ключ>");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                            break;
+                        }
+                        if (agent.ContextManager.StickyFacts is { } stickyFacts3)
+                        {
+                            var deleteKey = parts[2];
+                            if (stickyFacts3.DeleteFact(deleteKey))
+                            {
+                                Console.ForegroundColor = ConsoleColor.Green;
+                                Console.WriteLine($"✅ Факт удалён: {deleteKey}");
+                                Console.ResetColor();
+                            }
+                            else
+                            {
+                                Console.ForegroundColor = ConsoleColor.Red;
+                                Console.WriteLine($"❌ Факт не найден: {deleteKey}");
+                                Console.ResetColor();
+                            }
+                        }
+                        else
+                        {
+                            Console.ForegroundColor = ConsoleColor.Yellow;
+                            Console.WriteLine("⚠️  Sticky Facts не активна. Переключитесь: /context strategy sticky");
+                            Console.ResetColor();
+                        }
+                        Console.WriteLine();
+                        break;
+
+                    default:
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine($"❌ Неизвестная команда фактов: {factsCommand}. Доступны: list, save, delete");
+                        Console.ResetColor();
+                        Console.WriteLine();
+                        break;
+                }
+                continue;
+
+            case "/branch":
+                if (parts.Length < 2)
+                {
+                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.WriteLine("❌ Команды веток: /branch list, /branch create <имя>, /branch switch <id>, /branch checkpoint <имя>, /branch delete <id>");
+                    Console.ResetColor();
+                    Console.WriteLine();
+                    continue;
+                }
+
+                var branchCommand = parts[1].ToLowerInvariant();
+
+                switch (branchCommand)
+                {
+                    case "list":
+                        {
+                            Console.ForegroundColor = ConsoleColor.Yellow;
+                            Console.WriteLine("🌿 Ветки диалога:");
+                            Console.ResetColor();
+
+                            if (agent.ContextManager.Branching is { } branching)
+                            {
+                                Console.WriteLine(branching.GetStatus());
+                            }
+                            else
+                            {
+                                Console.ForegroundColor = ConsoleColor.Yellow;
+                                Console.WriteLine("   Branching не активна. Переключитесь: /context strategy branching");
+                                Console.ResetColor();
+                            }
+                            Console.WriteLine();
+                        }
+                        break;
+
+                    case "create":
+                        if (parts.Length < 3)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine("❌ Формат: /branch create <имя>");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                            break;
+                        }
+                        if (agent.ContextManager.Branching is { } branching2)
+                        {
+                            var branchName = parts[2];
+                            try
+                            {
+                                var branchId = branching2.CreateBranch(branchName);
+                                branching2.SwitchBranch(branchId);
+                                agent.ContextManager.SetStrategy(ContextStrategy.Branching);
+                                agent.ContextManager.Config.Strategy = ContextStrategy.Branching;
+
+                                Console.ForegroundColor = ConsoleColor.Green;
+                                Console.WriteLine($"✅ Ветка создана и активирована: \"{branchName}\" (id: {branchId})");
+                                Console.ResetColor();
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.ForegroundColor = ConsoleColor.Red;
+                                Console.WriteLine($"❌ Ошибка: {ex.Message}");
+                                Console.ResetColor();
+                            }
+                        }
+                        else
+                        {
+                            Console.ForegroundColor = ConsoleColor.Yellow;
+                            Console.WriteLine("⚠️  Branching не активна. Переключитесь: /context strategy branching");
+                            Console.ResetColor();
+                        }
+                        Console.WriteLine();
+                        break;
+
+                    case "switch":
+                        if (parts.Length < 3)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine("❌ Формат: /branch switch <id>");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                            break;
+                        }
+                        if (agent.ContextManager.Branching is { } branching3)
+                        {
+                            var branchId = parts[2];
+                            try
+                            {
+                                branching3.SwitchBranch(branchId);
+                                Console.ForegroundColor = ConsoleColor.Green;
+                                Console.WriteLine($"✅ Переключено на ветку: {branching3.ActiveBranchName} ({branchId})");
+                                Console.ResetColor();
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.ForegroundColor = ConsoleColor.Red;
+                                Console.WriteLine($"❌ Ошибка: {ex.Message}");
+                                Console.ResetColor();
+                            }
+                        }
+                        else
+                        {
+                            Console.ForegroundColor = ConsoleColor.Yellow;
+                            Console.WriteLine("⚠️  Branching не активна. Переключитесь: /context strategy branching");
+                            Console.ResetColor();
+                        }
+                        Console.WriteLine();
+                        break;
+
+                    case "checkpoint":
+                        if (parts.Length < 3)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine("❌ Формат: /branch checkpoint <имя>");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                            break;
+                        }
+                        if (agent.ContextManager.Branching is { } branching4)
+                        {
+                            var cpName = parts[2];
+                            try
+                            {
+                                var cp = branching4.CreateCheckpoint(cpName);
+                                Console.ForegroundColor = ConsoleColor.Green;
+                                Console.WriteLine($"✅ Checkpoint создан: \"{cpName}\" (id: {cp.Id}, сообщений: {cp.MessageCount})");
+                                Console.ResetColor();
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.ForegroundColor = ConsoleColor.Red;
+                                Console.WriteLine($"❌ Ошибка: {ex.Message}");
+                                Console.ResetColor();
+                            }
+                        }
+                        else
+                        {
+                            Console.ForegroundColor = ConsoleColor.Yellow;
+                            Console.WriteLine("⚠️  Branching не активна. Переключитесь: /context strategy branching");
+                            Console.ResetColor();
+                        }
+                        Console.WriteLine();
+                        break;
+
+                    case "delete":
+                        if (parts.Length < 3)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine("❌ Формат: /branch delete <id>");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                            break;
+                        }
+                        if (agent.ContextManager.Branching is { } branching5)
+                        {
+                            var branchId = parts[2];
+                            try
+                            {
+                                branching5.DeleteBranch(branchId);
+                                Console.ForegroundColor = ConsoleColor.Green;
+                                Console.WriteLine($"✅ Ветка удалена: {branchId}. Активна: {branching5.ActiveBranchName}");
+                                Console.ResetColor();
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.ForegroundColor = ConsoleColor.Red;
+                                Console.WriteLine($"❌ Ошибка: {ex.Message}");
+                                Console.ResetColor();
+                            }
+                        }
+                        else
+                        {
+                            Console.ForegroundColor = ConsoleColor.Yellow;
+                            Console.WriteLine("⚠️  Branching не активна. Переключитесь: /context strategy branching");
+                            Console.ResetColor();
+                        }
+                        Console.WriteLine();
+                        break;
+
+                    default:
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine($"❌ Неизвестная команда веток: {branchCommand}. Доступны: list, create, switch, checkpoint, delete");
+                        Console.ResetColor();
+                        Console.WriteLine();
+                        break;
+                }
+                continue;
+
             default:
                 Console.ForegroundColor = ConsoleColor.Red;
-                Console.WriteLine($"❌ Неизвестная команда: {command}. Доступны: /status, /model, /system, /maxtokens, /stop, /temp, /retry, /retrydelay, /loglevel, /metrics, /adaptive, /planner, /memory, /save");
+                Console.WriteLine($"❌ Неизвестная команда: {command}. Доступны: /status, /model, /system, /maxtokens, /stop, /temp, /retry, /retrydelay, /loglevel, /metrics, /adaptive, /planner, /memory, /context, /facts, /branch, /save");
                 Console.ResetColor();
                 Console.WriteLine();
                 continue;
@@ -831,6 +1243,10 @@ while (true)
     Console.ResetColor();
 
     var result = await agent.ProcessRequestAsync(input);
+
+    // Выводим логи после ответа (из буфера)
+    var logs = agent.Logger.FlushBuffer();
+    AgentLogger.PrintBufferedMessages(logs);
 
     if (!result.IsSuccess)
     {

@@ -19,6 +19,7 @@ public class ChatAgent
 {
     private readonly ChatClient _httpClient;
     private readonly AuthClient _authClient;
+    private readonly GigaChatConfig _config;
 
     private readonly List<ApiMessage> _history = new();
 
@@ -71,6 +72,9 @@ public class ChatAgent
     /// <summary>Управление контекстом.</summary>
     public ContextManager ContextManager { get; }
 
+    /// <summary>Конфигурация GigaChat.</summary>
+    public GigaChatConfig Config { get; set; } = null!;
+
     public ChatAgent(ChatClient httpClient, AuthClient authClient,
         RequestCache? cache = null, AgentLogger? logger = null, Memory? memory = null,
         AdaptiveBehavior? adaptive = null, Planner? planner = null, ContextManager? contextManager = null)
@@ -84,6 +88,7 @@ public class ChatAgent
         _planner = planner ?? new Planner(httpClient, authClient, Model, Logger, Memory);
         Planner = _planner;
         ContextManager = contextManager ?? new ContextManager(httpClient, authClient, Logger);
+        _config = new GigaChatConfig();
     }
 
     /// <summary>
@@ -108,16 +113,6 @@ public class ChatAgent
         {
             Metrics.CachedRequests++;
             Logger.Info($"Кэш: найден ответ для похожего запроса");
-            Console.WriteLine();
-            Console.ForegroundColor = ConsoleColor.DarkGray;
-            Console.WriteLine("   [из кэша]");
-            Console.ResetColor();
-            Console.WriteLine();
-            Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine("🤖 GigaChat:");
-            Console.ResetColor();
-            Console.WriteLine($"   {cachedAnswer}");
-            Console.WriteLine();
 
             return new AgentResult
             {
@@ -138,7 +133,7 @@ public class ChatAgent
         }
 
         // 3. Проверяем, нужен ли Planning
-        if (Planner.NeedsDecomposition(userMessage))
+        if (Config.PlannerEnabled && Planner.NeedsDecomposition(userMessage))
         {
             Logger.Info($"Запрос сложный, запускаю Planning...");
             var planResult = await ExecuteWithPlanningAsync(userMessage, relevantFacts);
