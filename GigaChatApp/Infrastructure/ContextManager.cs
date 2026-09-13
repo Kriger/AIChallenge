@@ -315,7 +315,7 @@ public class ContextManager
                             return;
                         }
 
-                        var summaryContent = parsed.Choices[0].Message?.Content ?? string.Empty;
+                        var summaryContent = parsed?.Choices?[0].Message?.Content ?? string.Empty;
                         if (string.IsNullOrWhiteSpace(summaryContent))
                             return;
 

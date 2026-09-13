@@ -138,28 +138,36 @@ public class Planner
             };
 
             var client = new HttpClient();
-            client.DefaultRequestHeaders.Authorization =
-                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
-            client.BaseAddress = new Uri("https://api.giga.chat");
+            try
+            {
+                client.DefaultRequestHeaders.Authorization =
+                    new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+                client.BaseAddress = new Uri("https://api.giga.chat");
 
-            var response = await client.PostAsJsonAsync("/v1/chat/completions", requestObj);
-            client.Dispose();
+                var response = await client.PostAsJsonAsync("/v1/chat/completions", requestObj);
 
-            if (!response.IsSuccessStatusCode)
-                return null;
+                if (!response.IsSuccessStatusCode)
+                    return null;
 
-            var parsed = await response.Content.ReadFromJsonAsync<PlanResponse>();
-            if (parsed?.Choices?.Count == 0)
-                return null;
+                var parsed = await response.Content.ReadFromJsonAsync<PlanResponse>();
+                if (parsed?.Choices?.Count == 0)
+                    return null;
 
-            var planText = parsed.Choices[0].Message?.Content ?? "";
+                var planText = parsed?.Choices?[0].Message?.Content ?? "";
+                if (string.IsNullOrEmpty(planText))
+                    return null;
 
-            // Парсим план
-            return ParsePlan(planText, request);
+                // Парсим план
+                return ParsePlan(planText, request);
+            }
+            finally
+            {
+                client.Dispose();
+            }
         }
         catch (Exception ex)
         {
-            _logger.Warning($"Ошибка создания плана: {ex.Message}");
+            _logger.Error($"Ошибка создания плана: {ex.Message}");
             return null;
         }
     }
@@ -349,7 +357,7 @@ public class Planner
     /// <summary>
     /// Парсит текст плана в объект Plan.
     /// </summary>
-    private static Plan ParsePlan(string planText, string originalRequest)
+    private static Plan? ParsePlan(string planText, string originalRequest)
     {
         var plan = new Plan { OriginalRequest = originalRequest };
 
@@ -400,7 +408,10 @@ public class Planner
             });
         }
 
-        return plan.Tasks.Count > 0 ? plan : null;
+        if (plan.Tasks.Count == 0)
+            return null;
+
+        return plan;
     }
 
     /// <summary>
