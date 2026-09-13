@@ -122,13 +122,21 @@ public class ChatAgent
         }
 
         // 2. Ищем релевантные факты
-        var relevantFacts = Memory.FindRelevant(userMessage);
-        if (relevantFacts.Count > 0)
+        List<Fact> relevantFacts = new();
+
+        // При Branching/StickyFacts факты берутся из ветки (через systemMessages)
+        // Memory.FindRelevant не используется чтобы не смешивать факты разных веток
+        if (ContextManager.Config.Strategy != ContextStrategy.Branching &&
+            ContextManager.Config.Strategy != ContextStrategy.StickyFacts)
         {
-            Logger.Info($"Память: найдено {relevantFacts.Count} релевантных факт(ов)");
-            foreach (var fact in relevantFacts)
+            relevantFacts = Memory.FindRelevant(userMessage);
+            if (relevantFacts.Count > 0)
             {
-                Logger.Debug($"  → {fact.Key}: {Truncate(fact.Value, 80)}");
+                Logger.Info($"Память: найдено {relevantFacts.Count} релевантных факт(ов)");
+                foreach (var fact in relevantFacts)
+                {
+                    Logger.Debug($"  → {fact.Key}: {Truncate(fact.Value, 80)}");
+                }
             }
         }
 
@@ -408,6 +416,9 @@ public class ChatAgent
             sb.AppendLine("==============================");
         }
 
+        // Факты ветки (Branching/StickyFacts) НЕ добавляем сюда — они уже в systemMessages
+        // и будут переданы как отдельное system-сообщение в API
+
         if (relevantFacts.Count > 0)
         {
             sb.AppendLine();
@@ -498,7 +509,8 @@ public class ChatAgent
 
                                 if (key.Length > 0 && value.Length > 0)
                                 {
-                                    Memory.Save(key, value, "extracted");
+                                    // Сохраняем факты в активную стратегию
+                                    SaveExtractedFact(key, value);
                                 }
                             }
                         }
@@ -511,6 +523,33 @@ public class ChatAgent
         catch (Exception ex)
         {
             Logger.Warning($"Ошибка извлечения фактов: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Сохраняет извлечённый факт в активную стратегию (Branching/StickyFacts)
+    /// или в долгосрочную память.
+    /// </summary>
+    private void SaveExtractedFact(string key, string value)
+    {
+        var strategy = ContextManager.Config.Strategy;
+
+        switch (strategy)
+        {
+            case ContextStrategy.Branching when ContextManager.Branching is { } branching:
+                branching.SaveFact(key, value);
+                Logger.Info($"Факт сохранён в ветку ({branching.ActiveBranchName}): {key} = \"{value[..Math.Min(40, value.Length)]}\"");
+                break;
+
+            case ContextStrategy.StickyFacts when ContextManager.StickyFacts is { } stickyFacts:
+                stickyFacts.SaveFact(key, value);
+                Logger.Info($"Факт сохранён (StickyFacts): {key} = \"{value[..Math.Min(40, value.Length)]}\"");
+                break;
+
+            default:
+                Memory.Save(key, value, "extracted");
+                Logger.Info($"Факт сохранён (Memory): {key} = \"{value[..Math.Min(40, value.Length)]}\"");
+                break;
         }
     }
 

@@ -26,6 +26,9 @@ public class DialogueBranch
     /// <summary>True, если это основная (master) ветка.</summary>
     public bool IsMain { get; set; }
 
+    /// <summary>Факты, привязанные к этой ветке (ключ-значение).</summary>
+    public Dictionary<string, string> Facts { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>
     /// Создать глубокую копию ветки.
     /// </summary>
@@ -36,6 +39,7 @@ public class DialogueBranch
             Id = newId,
             Name = newName,
             Messages = Messages.Select(m => new ApiMessage { Role = m.Role, Content = m.Content }).ToList(),
+            Facts = new Dictionary<string, string>(Facts, StringComparer.OrdinalIgnoreCase),
             CreatedAt = DateTime.UtcNow,
             LastModified = DateTime.UtcNow,
             IsMain = false,
@@ -59,6 +63,9 @@ public class BranchCheckpoint
 
     /// <summary>На какой ветке был создан чекпоинт.</summary>
     public string BranchId { get; set; } = string.Empty;
+
+    /// <summary>Факты на момент создания чекпоинта.</summary>
+    public Dictionary<string, string> Facts { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Время создания.</summary>
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
@@ -139,6 +146,7 @@ public class BranchingStrategy : IContextStrategy
             Name = name,
             MessageIndex = branch.Messages.Count,
             BranchId = branch.Id,
+            Facts = new Dictionary<string, string>(branch.Facts, StringComparer.OrdinalIgnoreCase),
             MessageCount = branch.Messages.Count,
             CreatedAt = DateTime.UtcNow,
         };
@@ -163,14 +171,16 @@ public class BranchingStrategy : IContextStrategy
         if (sourceBranch is null)
             throw new InvalidOperationException($"Ветка '{checkpoint.BranchId}' не найдена");
 
-        // Копируем сообщения до checkpoint
+        // Копируем сообщения и факты на момент checkpoint
         var newMessages = sourceBranch.Messages.Take(checkpoint.MessageIndex).ToList();
+        var newFacts = new Dictionary<string, string>(checkpoint.Facts, StringComparer.OrdinalIgnoreCase);
 
         var newBranch = new DialogueBranch
         {
             Id = $"branch-{++_branchCounter}",
             Name = branchName,
             Messages = newMessages,
+            Facts = newFacts,
             CreatedAt = DateTime.UtcNow,
             LastModified = DateTime.UtcNow,
             IsMain = false,
@@ -205,6 +215,46 @@ public class BranchingStrategy : IContextStrategy
         ActiveBranchId = branchId;
     }
 
+    // ==================== Факты ветки ====================
+
+    /// <summary>
+    /// Факты текущей активной ветки.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> Facts => ActiveBranch.Facts;
+
+    /// <summary>
+    /// Сохранить факт в текущей ветке.
+    /// </summary>
+    public void SaveFact(string key, string value)
+    {
+        ActiveBranch.Facts[key] = value;
+        ActiveBranch.LastModified = DateTime.UtcNow;
+    }
+
+    /// <summary>
+    /// Удалить факт из текущей ветки.
+    /// </summary>
+    public bool DeleteFact(string key)
+    {
+        var removed = ActiveBranch.Facts.Remove(key);
+        if (removed)
+            ActiveBranch.LastModified = DateTime.UtcNow;
+        return removed;
+    }
+
+    /// <summary>
+    /// Получить факт по ключу.
+    /// </summary>
+    public string? GetFact(string key)
+    {
+        return ActiveBranch.Facts.GetValueOrDefault(key);
+    }
+
+    /// <summary>
+    /// Получить все факты всех веток.
+    /// </summary>
+    public IReadOnlyList<DialogueBranch> GetAllBranches() => _branches.AsReadOnly();
+
     /// <summary>
     /// Удалить ветку (кроме main).
     /// </summary>
@@ -232,20 +282,42 @@ public class BranchingStrategy : IContextStrategy
         var originalTokens = TokenEstimator.EstimateHistoryTokens(branch.Messages);
         var processedTokens = originalTokens;
 
-        // Добавляем информацию о ветке в system-сообщение
-        var systemMessages = new List<ApiMessage>();
-        if (BranchCount > 1)
+        // Формируем факты ветки
+        var factsText = string.Empty;
+        if (branch.Facts.Count > 0)
         {
-            var branchInfo = $"[Активная ветка: {branch.Name} ({branch.Id})]\n" +
-                             $"Всего веток: {BranchCount}";
-            foreach (var cp in _checkpoints)
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine($"=== ФАКТЫ ВЕТКИ \"{branch.Name}\" ===");
+            foreach (var kvp in branch.Facts)
             {
-                branchInfo += $"\n  checkpoint {cp.Id}: \"{cp.Name}\" ({cp.MessageCount} сообщений)";
+                sb.AppendLine($"{kvp.Key}: {kvp.Value}");
             }
+            sb.AppendLine($"=== КОНЕЦ ФАКТОВ ВЕТКИ \"{branch.Name}\" ===");
+            factsText = sb.ToString();
+            processedTokens += TokenEstimator.EstimateTokens(factsText);
+        }
+
+        // Добавляем информацию о ветке и факты в system-сообщение
+        var systemMessages = new List<ApiMessage>();
+
+        if (!string.IsNullOrEmpty(factsText))
+        {
             systemMessages.Add(new ApiMessage
             {
                 Role = "system",
-                Content = $"=== ИНФОРМАЦИЯ О ВЕТВЛЕНИИ ===\n{branchInfo}\n=================================",
+                Content = factsText,
+            });
+        }
+
+        // Информация о ветвлении — только если есть другие ветки
+        if (BranchCount > 1)
+        {
+            var branchInfo = $"[Ветка: \"{branch.Name}\" ({branch.Id}) — АКТИВНАЯ]\n" +
+                             $"Других веток: {BranchCount - 1}";
+            systemMessages.Add(new ApiMessage
+            {
+                Role = "system",
+                Content = $"=== ВЕТВЛЕНИЕ ===\n{branchInfo}\n=================",
             });
         }
 
@@ -253,10 +325,10 @@ public class BranchingStrategy : IContextStrategy
         {
             Messages = branch.Messages.ToList(),
             SystemMessages = systemMessages,
-            SummaryText = $"Ветка: {branch.Name} ({branch.Messages.Count} сообщений)",
+            SummaryText = $"Ветка: {branch.Name} ({branch.Messages.Count} сообщений, {branch.Facts.Count} фактов)",
             OriginalTokens = originalTokens,
             CompressedTokens = processedTokens,
-            Description = $"Branching: ветка \"{branch.Name}\", {branch.Messages.Count} сообщений",
+            Description = $"Branching: ветка \"{branch.Name}\", {branch.Messages.Count} сообщений, {branch.Facts.Count} фактов",
             IsCompressed = false,
         };
     }
@@ -291,11 +363,6 @@ public class BranchingStrategy : IContextStrategy
     }
 
     /// <summary>
-    /// Получить все ветки.
-    /// </summary>
-    public IReadOnlyList<DialogueBranch> GetAllBranches() => _branches.AsReadOnly();
-
-    /// <summary>
     /// Получить все чекпоинты.
     /// </summary>
     public IReadOnlyList<BranchCheckpoint> GetAllCheckpoints() => _checkpoints.AsReadOnly();
@@ -318,7 +385,19 @@ public class BranchingStrategy : IContextStrategy
         foreach (var branch in _branches)
         {
             var marker = branch.Id == ActiveBranchId ? " ▶" : "  ";
-            sb.AppendLine($"  {marker} [{branch.Id}] \"{branch.Name}\" — {branch.Messages.Count} сообщений{(branch.IsMain ? " (main)" : "")}");
+            sb.AppendLine($"  {marker} [{branch.Id}] \"{branch.Name}\" — {branch.Messages.Count} сообщений, {branch.Facts.Count} фактов{(branch.IsMain ? " (main)" : "")}");
+        }
+
+        // Факты активной ветки
+        var active = ActiveBranch;
+        if (active.Facts.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("Факты текущей ветки:");
+            foreach (var kvp in active.Facts)
+            {
+                sb.AppendLine($"  {kvp.Key}: {kvp.Value}");
+            }
         }
 
         if (_checkpoints.Count > 0)

@@ -37,18 +37,21 @@ public class ChatClient
         // СЛИВАЕМ все system-сообщения в одно — API GigaChat требует одно system-сообщение
         var mergedSystemMessage = new StringBuilder();
 
-        // Сначала summary из ContextManager
+        // Сначала systemMessages (факты ветки, summary и т.д.)
         if (systemMessages is { Count: > 0 })
         {
             foreach (var msg in systemMessages)
             {
                 mergedSystemMessage.AppendLine(msg.Content);
+                mergedSystemMessage.AppendLine();
             }
         }
 
         // Затем основное системное сообщение
         if (!string.IsNullOrEmpty(systemMessage))
         {
+            if (mergedSystemMessage.Length > 0)
+                mergedSystemMessage.AppendLine("---");
             mergedSystemMessage.AppendLine(systemMessage);
         }
 

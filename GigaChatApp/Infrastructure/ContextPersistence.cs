@@ -166,6 +166,9 @@ internal class DialogueBranchDto
     [JsonPropertyName("messages")]
     public List<ApiMessage> Messages { get; set; } = new();
 
+    [JsonPropertyName("facts")]
+    public Dictionary<string, string> Facts { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
     [JsonPropertyName("createdAt")]
     public DateTime CreatedAt { get; set; }
 
@@ -192,6 +195,9 @@ internal class BranchCheckpointDto
 
     [JsonPropertyName("branchId")]
     public string BranchId { get; set; } = string.Empty;
+
+    [JsonPropertyName("facts")]
+    public Dictionary<string, string> Facts { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
     [JsonPropertyName("createdAt")]
     public DateTime CreatedAt { get; set; }
@@ -449,6 +455,7 @@ public static class ContextPersistence
                         Id = b.Id,
                         Name = b.Name,
                         Messages = b.Messages,
+                        Facts = new Dictionary<string, string>(b.Facts, StringComparer.OrdinalIgnoreCase),
                         CreatedAt = b.CreatedAt,
                         LastModified = b.LastModified,
                         IsMain = b.IsMain,
@@ -459,6 +466,7 @@ public static class ContextPersistence
                         Name = cp.Name,
                         MessageIndex = cp.MessageIndex,
                         BranchId = cp.BranchId,
+                        Facts = new Dictionary<string, string>(cp.Facts, StringComparer.OrdinalIgnoreCase),
                         CreatedAt = cp.CreatedAt,
                         MessageCount = cp.MessageCount,
                     }).ToList(),
@@ -632,6 +640,7 @@ public static class ContextPersistence
                                 Id = branchDto.Id,
                                 Name = branchDto.Name,
                                 Messages = branchDto.Messages,
+                                Facts = new Dictionary<string, string>(branchDto.Facts, StringComparer.OrdinalIgnoreCase),
                                 CreatedAt = branchDto.CreatedAt,
                                 LastModified = branchDto.LastModified,
                                 IsMain = branchDto.IsMain,
@@ -648,6 +657,7 @@ public static class ContextPersistence
                                 Name = cpDto.Name,
                                 MessageIndex = cpDto.MessageIndex,
                                 BranchId = cpDto.BranchId,
+                                Facts = new Dictionary<string, string>(cpDto.Facts, StringComparer.OrdinalIgnoreCase),
                                 CreatedAt = cpDto.CreatedAt,
                                 MessageCount = cpDto.MessageCount,
                             };
