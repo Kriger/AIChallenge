@@ -26,8 +26,11 @@ public class ChatAgent
     /// <summary>Собственная история диалога.</summary>
     public IReadOnlyList<ApiMessage> History => _history;
 
-    /// <summary>Долгосрочная память.</summary>
-    public Memory Memory { get; }
+    /// <summary>Менеджер памяти (краткосрочная, рабочая, долгосрочная).</summary>
+    public MemoryManager MemoryManager { get; }
+
+    /// <summary>Долгосрочная память (для обратной совместимости).</summary>
+    public LongTermMemory Memory => MemoryManager.LongTerm;
 
     /// <summary>Текущая модель.</summary>
     public string Model
@@ -76,16 +79,16 @@ public class ChatAgent
     public GigaChatConfig Config { get; set; } = null!;
 
     public ChatAgent(ChatClient httpClient, AuthClient authClient,
-        RequestCache? cache = null, AgentLogger? logger = null, Memory? memory = null,
+        RequestCache? cache = null, AgentLogger? logger = null, MemoryManager? memoryManager = null,
         AdaptiveBehavior? adaptive = null, Planner? planner = null, ContextManager? contextManager = null)
     {
         _httpClient = httpClient;
         _authClient = authClient;
         Cache = cache ?? new RequestCache();
         Logger = logger ?? new AgentLogger();
-        Memory = memory ?? new Memory(Logger);
+        MemoryManager = memoryManager ?? new MemoryManager(Logger);
         Adaptive = adaptive ?? new AdaptiveBehavior(Metrics, Cache, Logger);
-        _planner = planner ?? new Planner(httpClient, authClient, Model, Logger, Memory);
+        _planner = planner ?? new Planner(httpClient, authClient, Model, Logger, MemoryManager);
         Planner = _planner;
         ContextManager = contextManager ?? new ContextManager(httpClient, authClient, Logger);
         _config = new GigaChatConfig();
@@ -129,7 +132,7 @@ public class ChatAgent
         if (ContextManager.Config.Strategy != ContextStrategy.Branching &&
             ContextManager.Config.Strategy != ContextStrategy.StickyFacts)
         {
-            relevantFacts = Memory.FindRelevant(userMessage);
+            relevantFacts = MemoryManager.LongTerm.FindRelevant(userMessage);
             if (relevantFacts.Count > 0)
             {
                 Logger.Info($"Память: найдено {relevantFacts.Count} релевантных факт(ов)");
@@ -154,7 +157,10 @@ public class ChatAgent
         // 5. Извлекаем новые факты из диалога
         if (result.IsSuccess)
         {
-            ExtractFactsFromDialogue(userMessage, result.Answer);
+            Logger.Info("Запущено извлечение фактов из диалога...");
+            // Передаём полный диалог, а не только последние 2 сообщения
+            var dialogue = MemoryManager.ShortTerm.GetAll();
+            ExtractFactsFromDialogue(userMessage, result.Answer, dialogue);
         }
 
         // 6. Сохраняем в кэш и историю
@@ -272,6 +278,9 @@ public class ChatAgent
         // Добавляем запрос в полную историю
         _history.Add(new ApiMessage { Role = "user", Content = userMessage });
 
+        // Добавляем в краткосрочную память (диалог)
+        MemoryManager.ShortTerm.Add("user", userMessage);
+
         // Добавляем в ContextManager
         ContextManager.AddMessage(new ApiMessage { Role = "user", Content = userMessage });
 
@@ -306,9 +315,10 @@ public class ChatAgent
                     contextResult.SystemMessages
                 );
 
-                // Добавляем ответ в историю и ContextManager
+                // Добавляем ответ в историю, краткосрочную память и ContextManager
                 var assistantMessage = new ApiMessage { Role = "assistant", Content = apiResponse.Content };
                 _history.Add(assistantMessage);
+                MemoryManager.ShortTerm.Add("assistant", apiResponse.Content);
                 ContextManager.AddMessage(assistantMessage);
 
                 return new AgentResult
@@ -446,21 +456,24 @@ public class ChatAgent
     /// Извлекает новые факты из диалога и сохраняет в память.
     /// Использует LLM для анализа.
     /// </summary>
-    private async void ExtractFactsFromDialogue(string userMessage, string assistantAnswer)
+    private async void ExtractFactsFromDialogue(string userMessage, string assistantAnswer, IReadOnlyList<MemoryEntry>? dialogue = null)
     {
         try
         {
             var token = await _authClient.GetAccessTokenAsync();
 
+            // Формируем текст полного диалога для анализа
+            var dialogueText = string.Join("\n", dialogue?.Select(e => $"{e.Role}: {e.Content}") ?? new[] { $"{userMessage}\n{assistantAnswer}" });
+
             var extractionPrompt = $"""
-                Извлеки важные факты из следующего диалога.
+                Извлеки важные факты из полного диалога ниже.
                 Факты — это конкретная информация, которая может пригодиться в будущем.
                 Не извлекай общие фразы, приветствия или вопросы.
 
                 Формат: ключ: значение (однострочное описание)
 
-                Пользователь: {userMessage}
-                Ассистент: {assistantAnswer}
+                Полный диалог:
+                {dialogueText}
 
                 Извлеки факты в формате:
                 ключ: значение
@@ -498,6 +511,7 @@ public class ChatAgent
                     if (!string.IsNullOrWhiteSpace(factsText) && factsText != "нет фактов")
                     {
                         var lines = factsText.Split(['\n', '\r'], StringSplitOptions.RemoveEmptyEntries);
+                        var extractedCount = 0;
                         foreach (var line in lines)
                         {
                             var trimmed = line.Trim();
@@ -511,11 +525,25 @@ public class ChatAgent
                                 {
                                     // Сохраняем факты в активную стратегию
                                     SaveExtractedFact(key, value);
+                                    extractedCount++;
                                 }
                             }
                         }
+                        Logger.Info($"Извлечение фактов: найдено {extractedCount} факт(ов)");
+                    }
+                    else
+                    {
+                        Logger.Info("Извлечение фактов: LLM не нашёл фактов для извлечения");
                     }
                 }
+                else
+                {
+                    Logger.Info("Извлечение фактов: пустой ответ от LLM");
+                }
+            }
+            else
+            {
+                Logger.Warning($"Извлечение фактов: ошибка API HTTP {response.StatusCode}");
             }
 
             httpClient.Dispose();
@@ -527,28 +555,112 @@ public class ChatAgent
     }
 
     /// <summary>
-    /// Сохраняет извлечённый факт в активную стратегию (Branching/StickyFacts)
-    /// или в долгосрочную память.
+    /// Явно извлекает факты из полного диалога (для команд CLI).
+    /// </summary>
+    public async Task<int> ExtractFactsExplicitAsync(IReadOnlyList<MemoryEntry>? dialogue = null)
+    {
+        try
+        {
+            var token = await _authClient.GetAccessTokenAsync();
+
+            // Формируем текст полного диалога для анализа
+            var dialogueText = string.Join("\n", dialogue?.Select(e => $"{e.Role}: {e.Content}") ?? Array.Empty<string>());
+
+            var extractionPrompt = $"""
+                Извлеки важные факты из полного диалога ниже. Формат: ключ: значение.
+                Не извлекай вопросы, приветствия и общие фразы.
+                Если фактов нет — напиши "нет фактов".
+
+                Полный диалог:
+                {dialogueText}
+                """;
+
+            var extractionMessages = new List<ApiMessage>
+            {
+                new() { Role = "user", Content = extractionPrompt },
+            };
+
+            var extractionRequest = new Dictionary<string, object>
+            {
+                ["model"] = Model,
+                ["messages"] = extractionMessages.Select(m => new { m.Role, m.Content }).ToList<object>(),
+                ["stream"] = false,
+            };
+
+            var httpClient = new HttpClient();
+            httpClient.DefaultRequestHeaders.Authorization =
+                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+            httpClient.BaseAddress = new Uri("https://api.giga.chat");
+
+            var response = await httpClient.PostAsJsonAsync("/v1/chat/completions", extractionRequest);
+            httpClient.Dispose();
+
+            if (!response.IsSuccessStatusCode)
+            {
+                Logger.Warning($"Извлечение фактов: ошибка API HTTP {response.StatusCode}");
+                return 0;
+            }
+
+            var parsed = await response.Content.ReadFromJsonAsync<ExtractionResponse>();
+            if (parsed is null || parsed.Choices is null || parsed.Choices.Count == 0) return 0;
+
+            var factsText = parsed.Choices[0].Message?.Content ?? "";
+            if (string.IsNullOrWhiteSpace(factsText) || factsText == "нет фактов") return 0;
+
+            var lines = factsText.Split(['\n', '\r'], StringSplitOptions.RemoveEmptyEntries);
+            var extractedCount = 0;
+            foreach (var line in lines)
+            {
+                var trimmed = line.Trim();
+                var colonIndex = trimmed.IndexOf(':');
+                if (colonIndex > 0 && colonIndex < trimmed.Length - 1)
+                {
+                    var key = trimmed[..colonIndex].Trim();
+                    var value = trimmed[(colonIndex + 1)..].Trim();
+                    if (key.Length > 0 && value.Length > 0)
+                    {
+                        SaveExtractedFact(key, value);
+                        extractedCount++;
+                    }
+                }
+            }
+            return extractedCount;
+        }
+        catch (Exception ex)
+        {
+            Logger.Warning($"Ошибка извлечения фактов: {ex.Message}");
+            return 0;
+        }
+    }
+
+    /// <summary>
+    /// Сохраняет извлечённый факт в активную стратегию (Branching/StickyFacts),
+    /// в долгосрочную память и в рабочую память.
     /// </summary>
     private void SaveExtractedFact(string key, string value)
     {
+        // Всегда сохраняем в долгосрочную память
+        MemoryManager.LongTerm.Save(key, value, "extracted");
+
+        // Сохраняем в рабочую память как данные задачи
+        MemoryManager.Working.Save(key, value, "fact");
+
         var strategy = ContextManager.Config.Strategy;
 
         switch (strategy)
         {
             case ContextStrategy.Branching when ContextManager.Branching is { } branching:
                 branching.SaveFact(key, value);
-                Logger.Info($"Факт сохранён в ветку ({branching.ActiveBranchName}): {key} = \"{value[..Math.Min(40, value.Length)]}\"");
+                Logger.Info($"Факт сохранён: ветка ({branching.ActiveBranchName}) + LongTerm + Working: {key}");
                 break;
 
             case ContextStrategy.StickyFacts when ContextManager.StickyFacts is { } stickyFacts:
                 stickyFacts.SaveFact(key, value);
-                Logger.Info($"Факт сохранён (StickyFacts): {key} = \"{value[..Math.Min(40, value.Length)]}\"");
+                Logger.Info($"Факт сохранён: StickyFacts + LongTerm + Working: {key}");
                 break;
 
             default:
-                Memory.Save(key, value, "extracted");
-                Logger.Info($"Факт сохранён (Memory): {key} = \"{value[..Math.Min(40, value.Length)]}\"");
+                Logger.Info($"Факт сохранён: LongTerm + Working: {key}");
                 break;
         }
     }
@@ -560,7 +672,8 @@ public class ChatAgent
     {
         _history.Clear();
         Cache.Clear();
-        Memory.Clear();
+        MemoryManager.ShortTerm.Clear();
+        MemoryManager.LongTerm.Clear();
         ContextManager.Clear();
         Logger.Info("История, кэш, память и контекст очищены");
     }
@@ -571,9 +684,11 @@ public class ChatAgent
     public void LoadHistory(IEnumerable<ApiMessage> messages)
     {
         _history.Clear();
+        MemoryManager.ShortTerm.Clear();
         foreach (var msg in messages)
         {
             _history.Add(msg);
+            MemoryManager.ShortTerm.Add(msg.Role, msg.Content);
         }
         Logger.Info($"Загружено {messages.Count()} сообщений истории");
     }
@@ -592,7 +707,7 @@ public class ChatAgent
     /// </summary>
     private void PrintSavedFacts()
     {
-        var changes = Memory.GetRecentChanges();
+        var changes = MemoryManager.LongTerm.GetRecentChanges();
         if (changes.Count == 0)
             return;
 

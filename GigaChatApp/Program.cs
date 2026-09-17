@@ -49,7 +49,7 @@ Console.WriteLine();
 Console.WriteLine("📖 Команды: /status, /model, /system <текст>, /maxtokens <число>, /stop <seq1,seq2>, /temp <0-2>");
 Console.WriteLine("   Адаптация: /adaptive (статус), /adaptive on/off/reset/threshold <значение>");
 Console.WriteLine("   Планировщик: /planner (статус)");
-Console.WriteLine("   Память: /memory list, /memory save <ключ> <значение>, /memory delete <ключ>, /memory search <запрос>");
+Console.WriteLine("   Память: /memory list, /memory save <ключ> <значение>, /memory delete <ключ>, /memory search <запрос>, /memory status, /memory extract");
 Console.WriteLine("   Контекст: /context (статус), /context strategy (список), /context strategy <sliding|sticky|branching>");
 Console.WriteLine("   Факты: /facts list, /facts save <ключ> <значение>, /facts delete <ключ>");
 Console.WriteLine("   Ветки: /branch list, /branch create <имя>, /branch switch <id>, /branch checkpoint <имя>, /branch create-from <cp-id> <имя>, /branch delete <id>");
@@ -72,7 +72,7 @@ var authClient = new AuthClient(httpClient, config);
 var chatClient = new ChatClient(httpClient);
 var logger = new AgentLogger(LogLevel.Info);
 var cache = new RequestCache(maxSize: 100);
-var memory = new Memory(logger);
+var memoryManager = new MemoryManager(logger);
 
 // Инициализация управления контекстом
 var contextConfig = new ContextManagerConfig
@@ -85,9 +85,9 @@ var contextConfig = new ContextManagerConfig
 };
 
 var contextManager = new ContextManager(chatClient, authClient, logger, contextConfig);
-var agent = new ChatAgent(chatClient, authClient, cache, logger, memory, null, null, contextManager);
+var agent = new ChatAgent(chatClient, authClient, cache, logger, memoryManager, null, null, contextManager);
 var adaptive = new AdaptiveBehavior(agent.Metrics, cache, logger);
-var planner = new Planner(chatClient, authClient, config.Model, logger, memory);
+var planner = new Planner(chatClient, authClient, config.Model, logger, memoryManager);
 agent.Adaptive = adaptive;
 agent.Planner = planner;
 agent.Config = config;
@@ -214,6 +214,15 @@ while (true)
                 Console.WriteLine($"   Токены: {m.TotalPromptTokens} in → {m.TotalCompletionTokens} out");
                 Console.WriteLine($"   Токены контекста: {m.TotalContextTokens} всего, {m.LastContextTokens} последний");
                 Console.WriteLine($"   Кэш: {agent.Cache.Count} записей");
+                Console.WriteLine();
+
+                // Статус памяти
+                Console.ForegroundColor = ConsoleColor.Magenta;
+                Console.WriteLine("🧠 Память:");
+                Console.ResetColor();
+                Console.WriteLine($"   Краткосрочная (диалог): {agent.MemoryManager.ShortTerm.Count} записей");
+                Console.WriteLine($"   Рабочая (задача):       {agent.MemoryManager.Working.Count} записей, задача: {agent.MemoryManager.Working.CurrentTaskId ?? "нет"}");
+                Console.WriteLine($"   Долгосрочная (знания):  {agent.MemoryManager.LongTerm.Count} фактов");
                 Console.WriteLine();
                 continue;
 
@@ -419,7 +428,7 @@ while (true)
                 Console.WriteLine($"   Токены: {met.TotalPromptTokens} in → {met.TotalCompletionTokens} out");
                 Console.WriteLine($"   Токены контекста: {met.TotalContextTokens} всего, {met.LastContextTokens} последний");
                 Console.WriteLine($"   Кэш: {agent.Cache.Count} записей");
-                Console.WriteLine($"   Память: {agent.Memory.Count} фактов");
+                Console.WriteLine($"   Память: {agent.MemoryManager.ShortTerm.Count} кратк. | {agent.MemoryManager.Working.Count} рабоч. | {agent.Memory.Count} длг.");
                 Console.WriteLine();
 
                 // Метрики контекста
@@ -524,7 +533,7 @@ while (true)
                 if (parts.Length < 2)
                 {
                     Console.ForegroundColor = ConsoleColor.Red;
-                    Console.WriteLine("❌ Команды памяти: /memory list, /memory save <ключ> <значение>, /memory delete <ключ>, /memory search <запрос>");
+                    Console.WriteLine("❌ Команды памяти: /memory list, /memory save <ключ> <значение>, /memory delete <ключ>, /memory search <запрос>, /memory status, /memory extract");
                     Console.ResetColor();
                     Console.WriteLine();
                     continue;
@@ -622,9 +631,9 @@ while (true)
                             break;
                         }
                         var searchQuery = parts[2];
-                        var searchResults = agent.Memory.FindRelevant(searchQuery);
+                        var searchResults = agent.MemoryManager.LongTerm.FindRelevant(searchQuery);
                         Console.ForegroundColor = ConsoleColor.Yellow;
-                        Console.WriteLine($"🔍 Поиск по памяти: \"{searchQuery}\"");
+                        Console.WriteLine($"🔍 Поиск по долгосрочной памяти: \"{searchQuery}\"");
                         Console.ResetColor();
                         if (searchResults.Count == 0)
                         {
@@ -643,9 +652,395 @@ while (true)
                         Console.WriteLine();
                         break;
 
+                    case "status":
+                        Console.ForegroundColor = ConsoleColor.Magenta;
+                        Console.WriteLine("🧠 Статус всех слоёв памяти:");
+                        Console.ResetColor();
+                        Console.WriteLine();
+
+                        // Краткосрочная
+                        Console.ForegroundColor = ConsoleColor.Green;
+                        Console.WriteLine("── Краткосрочная память (диалог) ──");
+                        Console.ResetColor();
+                        Console.WriteLine($"   Записей: {agent.MemoryManager.ShortTerm.Count}");
+                        Console.WriteLine($"   Лимит: {agent.MemoryManager.ShortTerm.MaxSize}");
+                        if (agent.MemoryManager.ShortTerm.Count > 0)
+                        {
+                            var last = agent.MemoryManager.ShortTerm.Last;
+                            if (last is not null)
+                            {
+                                Console.ForegroundColor = ConsoleColor.Gray;
+                                Console.WriteLine($"   Последняя: [{last.Role}] {last.Content[..Math.Min(80, last.Content.Length)]}");
+                                Console.ResetColor();
+                            }
+                        }
+                        Console.WriteLine();
+
+                        // Рабочая
+                        Console.ForegroundColor = ConsoleColor.Cyan;
+                        Console.WriteLine("── Рабочая память (текущая задача) ──");
+                        Console.ResetColor();
+                        Console.WriteLine($"   Записей: {agent.MemoryManager.Working.Count}");
+                        Console.WriteLine($"   Задача: {agent.MemoryManager.Working.CurrentTaskId ?? "нет"}");
+                        Console.WriteLine($"   Статус: {agent.MemoryManager.Working.CurrentTaskStatus ?? "нет"}");
+                        if (agent.MemoryManager.Working.Count > 0)
+                        {
+                            var entries = agent.MemoryManager.Working.LoadCurrentTaskData();
+                            foreach (var entry in entries.Take(5))
+                            {
+                                Console.ForegroundColor = ConsoleColor.Gray;
+                                Console.Write($"   [{entry.Type,-8}] {entry.Key}: ");
+                                Console.ResetColor();
+                                Console.WriteLine(entry.Value[..Math.Min(60, entry.Value.Length)]);
+                            }
+                            if (entries.Count > 5)
+                                Console.WriteLine($"   ... и ещё {entries.Count - 5} записей");
+                        }
+                        Console.WriteLine();
+
+                        // Долгосрочная
+                        Console.ForegroundColor = ConsoleColor.Yellow;
+                        Console.WriteLine("── Долгосрочная память (знания) ──");
+                        Console.ResetColor();
+                        Console.WriteLine($"   Фактов: {agent.MemoryManager.LongTerm.Count}");
+                        if (agent.MemoryManager.LongTerm.Count > 0)
+                        {
+                            foreach (var kvp in agent.MemoryManager.LongTerm.All.Take(5))
+                            {
+                                var fact = kvp.Value;
+                                var color = fact.Source switch
+                                {
+                                    "user" => ConsoleColor.Green,
+                                    "extracted" => ConsoleColor.Cyan,
+                                    "explicit" => ConsoleColor.Magenta,
+                                    _ => ConsoleColor.White,
+                                };
+                                Console.ForegroundColor = color;
+                                Console.Write($"   [{fact.Source,-9}] ");
+                                Console.ResetColor();
+                                Console.Write($"{fact.Key}: ");
+                                Console.ForegroundColor = ConsoleColor.Gray;
+                                Console.WriteLine(fact.Value[..Math.Min(60, fact.Value.Length)]);
+                                Console.ResetColor();
+                            }
+                            if (agent.MemoryManager.LongTerm.Count > 5)
+                                Console.WriteLine($"   ... и ещё {agent.MemoryManager.LongTerm.Count - 5} фактов");
+                        }
+                        Console.WriteLine();
+                        break;
+
+                    case "extract":
+                        {
+                            Console.ForegroundColor = ConsoleColor.Yellow;
+                            Console.WriteLine("🧠 Извлечение фактов из полного диалога...");
+                            Console.ResetColor();
+
+                            var dialogue = agent.MemoryManager.ShortTerm.GetAll();
+                            if (dialogue.Count == 0)
+                            {
+                                Console.WriteLine("   Диалог пуст");
+                                Console.WriteLine();
+                                break;
+                            }
+
+                            var count = await agent.ExtractFactsExplicitAsync(dialogue);
+                            Console.ForegroundColor = count > 0 ? ConsoleColor.Green : ConsoleColor.Yellow;
+                            Console.WriteLine(count > 0
+                                ? $"✅ Извлечено {count} факт(ов) в долгосрочную память"
+                                : "ℹ️ Факты не найдены (LLM не определил значимых фактов)");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                            break;
+                        }
+
                     default:
                         Console.ForegroundColor = ConsoleColor.Red;
-                        Console.WriteLine($"❌ Неизвестная команда памяти: {memoryCommand}. Доступны: list, save, delete, search");
+                        Console.WriteLine($"❌ Неизвестная команда памяти: {memoryCommand}. Доступны: list, save, delete, search, status, extract");
+                        Console.ResetColor();
+                        Console.WriteLine();
+                        break;
+                }
+                continue;
+
+            // === Команды краткосрочной памяти (диалог) ===
+            case "/st":
+            case "/shortterm":
+                if (parts.Length < 2)
+                {
+                    Console.ForegroundColor = ConsoleColor.Yellow;
+                    Console.WriteLine("🗨 Краткосрочная память (текущий диалог):");
+                    Console.ResetColor();
+                    Console.WriteLine($"   Записей: {agent.MemoryManager.ShortTerm.Count}");
+                    Console.WriteLine($"   Максимум: {agent.MemoryManager.ShortTerm.MaxSize}");
+                    Console.WriteLine("   Команды: /st list, /st recent <N>, /st search <запрос>, /st clear");
+                    Console.WriteLine();
+                    continue;
+                }
+
+                var stCmd = parts[1].ToLowerInvariant();
+                switch (stCmd)
+                {
+                    case "list":
+                        {
+                            Console.ForegroundColor = ConsoleColor.Yellow;
+                            Console.WriteLine("🗨 Краткосрочная память:");
+                            Console.ResetColor();
+                            var entries = agent.MemoryManager.ShortTerm.GetAll();
+                            if (entries.Count == 0)
+                            {
+                                Console.WriteLine("   (пусто)");
+                            }
+                            else
+                            {
+                                foreach (var entry in entries)
+                                {
+                                    var color = entry.Role switch
+                                    {
+                                        "user" => ConsoleColor.Green,
+                                        "assistant" => ConsoleColor.Cyan,
+                                        "system" => ConsoleColor.Gray,
+                                        _ => ConsoleColor.White,
+                                    };
+                                    Console.ForegroundColor = color;
+                                    Console.Write($"   [{entry.Role,-10}] ");
+                                    Console.ResetColor();
+                                    Console.WriteLine(entry.Content);
+                                }
+                            }
+                            Console.WriteLine();
+                            break;
+                        }
+
+                    case "recent":
+                        {
+                            int count = Math.Min(20, agent.MemoryManager.ShortTerm.Count);
+                            if (parts.Length >= 3 && int.TryParse(parts[2], out var requested))
+                            {
+                                count = Math.Max(1, Math.Min(requested, agent.MemoryManager.ShortTerm.Count));
+                            }
+                            Console.ForegroundColor = ConsoleColor.Yellow;
+                            Console.WriteLine($"🗨 Последние {count} записей:");
+                            Console.ResetColor();
+                            var recent = agent.MemoryManager.ShortTerm.GetRecent(count);
+                            foreach (var entry in recent)
+                            {
+                                Console.ForegroundColor = ConsoleColor.Gray;
+                                Console.Write($"   [{entry.Role,-10}] ");
+                                Console.ResetColor();
+                                Console.WriteLine(entry.Content);
+                            }
+                            Console.WriteLine();
+                            break;
+                        }
+
+                    case "search":
+                        {
+                            if (parts.Length < 3)
+                            {
+                                Console.ForegroundColor = ConsoleColor.Red;
+                                Console.WriteLine("❌ Формат: /st search <запрос>");
+                                Console.ResetColor();
+                                Console.WriteLine();
+                                break;
+                            }
+                            var query = string.Join(" ", parts.Skip(2));
+                            var results = agent.MemoryManager.ShortTerm.Search(query);
+                            Console.ForegroundColor = ConsoleColor.Yellow;
+                            Console.WriteLine($"🔍 Поиск в краткосрочной памяти: \"{query}\"");
+                            Console.ResetColor();
+                            if (results.Count == 0)
+                            {
+                                Console.WriteLine("   Ничего не найдено");
+                            }
+                            else
+                            {
+                                foreach (var entry in results)
+                                {
+                                    Console.ForegroundColor = ConsoleColor.Cyan;
+                                    Console.Write($"   → [{entry.Role,-10}] ");
+                                    Console.ResetColor();
+                                    Console.WriteLine(entry.Content);
+                                }
+                            }
+                            Console.WriteLine();
+                            break;
+                        }
+
+                    case "clear":
+                        agent.MemoryManager.ClearShortTerm();
+                        Console.ForegroundColor = ConsoleColor.Green;
+                        Console.WriteLine("✅ Краткосрочная память очищена");
+                        Console.ResetColor();
+                        Console.WriteLine();
+                        break;
+
+                    default:
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine($"❌ Неизвестная команда: {stCmd}. Доступны: list, recent, search, clear");
+                        Console.ResetColor();
+                        Console.WriteLine();
+                        break;
+                }
+                continue;
+
+            // === Команды рабочей памяти (текущая задача) ===
+            case "/wt":
+            case "/working":
+                if (parts.Length < 2)
+                {
+                    Console.ForegroundColor = ConsoleColor.Yellow;
+                    Console.WriteLine("⚙ Рабочая память (текущая задача):");
+                    Console.ResetColor();
+                    Console.WriteLine($"   Записей: {agent.MemoryManager.Working.Count}");
+                    Console.WriteLine($"   Задача: {agent.MemoryManager.Working.CurrentTaskId ?? "нет"} [{agent.MemoryManager.Working.CurrentTaskStatus ?? "нет"}]");
+                    Console.WriteLine("   Команды: /wt list, /wt save <ключ> <значение>, /wt delete <ключ>, /wt task <id>");
+                    Console.WriteLine();
+                    continue;
+                }
+
+                var wtCmd = parts[1].ToLowerInvariant();
+                switch (wtCmd)
+                {
+                    case "list":
+                        {
+                            Console.ForegroundColor = ConsoleColor.Yellow;
+                            Console.WriteLine("⚙ Рабочая память:");
+                            Console.ResetColor();
+                            var entries = agent.MemoryManager.Working.LoadCurrentTaskData();
+                            if (entries.Count == 0)
+                            {
+                                Console.WriteLine("   (пусто)");
+                            }
+                            else
+                            {
+                                foreach (var entry in entries)
+                                {
+                                    var color = entry.Type switch
+                                    {
+                                        "plan" => ConsoleColor.Magenta,
+                                        "task" => ConsoleColor.Cyan,
+                                        "result" => ConsoleColor.Green,
+                                        "fact" => ConsoleColor.Yellow,
+                                        _ => ConsoleColor.White,
+                                    };
+                                    Console.ForegroundColor = color;
+                                    Console.Write($"   [{entry.Type,-8}] ");
+                                    Console.ResetColor();
+                                    Console.Write($"{entry.Key}: ");
+                                    Console.ForegroundColor = ConsoleColor.Gray;
+                                    Console.WriteLine(entry.Value);
+                                    Console.ResetColor();
+                                }
+                            }
+                            Console.WriteLine();
+                            break;
+                        }
+
+                    case "save":
+                        {
+                            if (parts.Length < 4)
+                            {
+                                Console.ForegroundColor = ConsoleColor.Red;
+                                Console.WriteLine("❌ Формат: /wt save <ключ> <значение>");
+                                Console.ResetColor();
+                                Console.WriteLine();
+                                break;
+                            }
+                            var key = parts[2];
+                            var value = parts[3];
+                            agent.MemoryManager.Save(MemoryType.Working, key, value, "user");
+                            Console.ForegroundColor = ConsoleColor.Green;
+                            Console.WriteLine($"✅ Сохранено в рабочую память: {key} = \"{value}\"");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                            break;
+                        }
+
+                    case "delete":
+                        {
+                            if (parts.Length < 3)
+                            {
+                                Console.ForegroundColor = ConsoleColor.Red;
+                                Console.WriteLine("❌ Формат: /wt delete <ключ>");
+                                Console.ResetColor();
+                                Console.WriteLine();
+                                break;
+                            }
+                            var key = parts[2];
+                            if (agent.MemoryManager.Working.Delete(key))
+                            {
+                                Console.ForegroundColor = ConsoleColor.Green;
+                                Console.WriteLine($"✅ Удалено из рабочей памяти: {key}");
+                                Console.ResetColor();
+                            }
+                            else
+                            {
+                                Console.ForegroundColor = ConsoleColor.Red;
+                                Console.WriteLine($"❌ Не найдено: {key}");
+                                Console.ResetColor();
+                            }
+                            Console.WriteLine();
+                            break;
+                        }
+
+                    case "task":
+                        {
+                            if (parts.Length < 3)
+                            {
+                                Console.ForegroundColor = ConsoleColor.Red;
+                                Console.WriteLine("❌ Формат: /wt task <start|complete|fail> [id]");
+                                Console.ResetColor();
+                                Console.WriteLine();
+                                break;
+                            }
+                            var taskAction = parts[2];
+                            switch (taskAction)
+                            {
+                                case "start":
+                                    var taskId = parts.Length >= 4 ? parts[3] : Guid.NewGuid().ToString("N")[..8];
+                                    agent.MemoryManager.StartTask(taskId);
+                                    Console.ForegroundColor = ConsoleColor.Green;
+                                    Console.WriteLine($"✅ Начата задача: {taskId}");
+                                    Console.ResetColor();
+                                    break;
+
+                                case "complete":
+                                    var completeResult = parts.Length >= 4 ? string.Join(" ", parts.Skip(3)) : null;
+                                    agent.MemoryManager.CompleteTask(completeResult);
+                                    Console.ForegroundColor = ConsoleColor.Green;
+                                    Console.WriteLine("✅ Текущая задача завершена");
+                                    Console.ResetColor();
+                                    break;
+
+                                case "fail":
+                                    var reason = parts.Length >= 4 ? string.Join(" ", parts.Skip(3)) : "не указано";
+                                    agent.MemoryManager.FailTask(reason);
+                                    Console.ForegroundColor = ConsoleColor.Red;
+                                    Console.WriteLine($"❌ Текущая задача провалена: {reason}");
+                                    Console.ResetColor();
+                                    break;
+
+                                default:
+                                    Console.ForegroundColor = ConsoleColor.Red;
+                                    Console.WriteLine($"❌ Неизвестное действие: {taskAction}. Доступны: start, complete, fail");
+                                    Console.ResetColor();
+                                    break;
+                            }
+                            Console.WriteLine();
+                            break;
+                        }
+
+                    case "clear":
+                        agent.MemoryManager.ClearWorking();
+                        Console.ForegroundColor = ConsoleColor.Green;
+                        Console.WriteLine("✅ Рабочая память очищена");
+                        Console.ResetColor();
+                        Console.WriteLine();
+                        break;
+
+                    default:
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine($"❌ Неизвестная команда: {wtCmd}. Доступны: list, save, delete, task, clear");
                         Console.ResetColor();
                         Console.WriteLine();
                         break;

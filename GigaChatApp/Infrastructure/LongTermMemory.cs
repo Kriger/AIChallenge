@@ -4,9 +4,10 @@ namespace GigaChatApp.Infrastructure;
 
 /// <summary>
 /// Долгосрочная память агента.
-/// Хранит факты, позволяет искать релевантные по ключу или содержимому.
+/// Хранит факты, знания, профиль пользователя и принятые решения.
+/// Переживает сессию диалога, сохраняется между запусками.
 /// </summary>
-public class Memory
+public class LongTermMemory
 {
     private readonly Dictionary<string, Fact> _facts = new(StringComparer.OrdinalIgnoreCase);
     private readonly AgentLogger _logger;
@@ -16,7 +17,7 @@ public class Memory
     /// </summary>
     public int MaxSize { get; set; } = 500;
 
-    public Memory(AgentLogger? logger = null)
+    public LongTermMemory(AgentLogger? logger = null)
     {
         _logger = logger ?? new AgentLogger(LogLevel.Info);
     }
@@ -27,13 +28,13 @@ public class Memory
     public void Save(string key, string value, string source = "user")
     {
         var wasNew = !_facts.ContainsKey(key);
-        
+
         if (_facts.TryGetValue(key, out var existing))
         {
             existing.Value = value;
             existing.Source = source;
             existing.CreatedAt = DateTime.UtcNow;
-            _logger.Info($"Факт обновлён: {key} = \"{Truncate(value, 50)}\"");
+            _logger.Info($"[Длг. память] Факт обновлён: {key} = \"{Truncate(value, 50)}\"");
         }
         else
         {
@@ -44,7 +45,7 @@ public class Memory
                 if (oldest.Key is not null)
                 {
                     _facts.Remove(oldest.Key);
-                    _logger.Info($"Память переполнена, удалён факт: {oldest.Key}");
+                    _logger.Info($"[Длг. память] Память переполнена, удалён факт: {oldest.Key}");
                 }
             }
 
@@ -55,9 +56,9 @@ public class Memory
                 Source = source,
                 CreatedAt = DateTime.UtcNow,
             };
-            _logger.Info($"Факт сохранён: {key} = \"{Truncate(value, 50)}\"");
+            _logger.Info($"[Длг. память] Факт сохранён: {key} = \"{Truncate(value, 50)}\"");
         }
-        
+
         // Сохраняем информацию о последнем изменении
         _lastChanges = new List<FactChange>
         {
@@ -172,7 +173,7 @@ public class Memory
     public void Clear()
     {
         _facts.Clear();
-        _logger.Info("Память очищена");
+        _logger.Info("[Длг. память] Память очищена");
     }
 
     /// <summary>

@@ -12,7 +12,7 @@ public class Planner
     private readonly AuthClient _authClient;
     private string _model;
     private readonly AgentLogger _logger;
-    private readonly Memory _memory;
+    private readonly MemoryManager _memoryManager;
     private int _maxTasks;
 
     /// <summary>
@@ -54,14 +54,14 @@ public class Planner
         AuthClient authClient,
         string model,
         AgentLogger logger,
-        Memory memory,
+        MemoryManager memoryManager,
         int maxTasks = 5)
     {
         _httpClient = httpClient;
         _authClient = authClient;
         _model = model;
         _logger = logger;
-        _memory = memory;
+        _memoryManager = memoryManager;
         _maxTasks = maxTasks;
     }
 

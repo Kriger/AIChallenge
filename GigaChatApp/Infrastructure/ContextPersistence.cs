@@ -207,6 +207,72 @@ internal class BranchCheckpointDto
 }
 
 /// <summary>
+/// Сериализуемая версия ShortTermMemory для JSON.
+/// </summary>
+internal class ShortTermMemoryDto
+{
+    [JsonPropertyName("entries")]
+    public List<ShortTermEntryDto> Entries { get; set; } = new();
+
+    [JsonPropertyName("maxSize")]
+    public int MaxSize { get; set; } = 100;
+}
+
+internal class ShortTermEntryDto
+{
+    [JsonPropertyName("role")]
+    public string Role { get; set; } = string.Empty;
+
+    [JsonPropertyName("content")]
+    public string Content { get; set; } = string.Empty;
+
+    [JsonPropertyName("metadata")]
+    public string? Metadata { get; set; }
+
+    [JsonPropertyName("timestamp")]
+    public DateTime Timestamp { get; set; }
+}
+
+/// <summary>
+/// Сериализуемая версия WorkingMemory для JSON.
+/// </summary>
+internal class WorkingMemoryDto
+{
+    [JsonPropertyName("entries")]
+    public Dictionary<string, WorkingEntryDto> Entries { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    [JsonPropertyName("currentTaskId")]
+    public string? CurrentTaskId { get; set; }
+
+    [JsonPropertyName("currentTaskStatus")]
+    public string? CurrentTaskStatus { get; set; }
+
+    [JsonPropertyName("taskStartedAt")]
+    public DateTime? TaskStartedAt { get; set; }
+}
+
+internal class WorkingEntryDto
+{
+    [JsonPropertyName("key")]
+    public string Key { get; set; } = string.Empty;
+
+    [JsonPropertyName("value")]
+    public string Value { get; set; } = string.Empty;
+
+    [JsonPropertyName("type")]
+    public string Type { get; set; } = "data";
+
+    [JsonPropertyName("taskId")]
+    public string? TaskId { get; set; }
+
+    [JsonPropertyName("createdAt")]
+    public DateTime CreatedAt { get; set; }
+
+    [JsonPropertyName("updatedAt")]
+    public DateTime? UpdatedAt { get; set; }
+}
+
+/// <summary>
 /// Сериализуемая версия фактов StickyFacts для JSON.
 /// </summary>
 internal class StickyFactsDto
@@ -272,13 +338,19 @@ internal class HistoryDto
 internal class AgentContext
 {
     [JsonPropertyName("version")]
-    public int Version => 1;
+    public int Version => 2;
 
     [JsonPropertyName("savedAt")]
     public DateTime SavedAt { get; set; }
 
     [JsonPropertyName("history")]
     public HistoryDto History { get; set; } = new();
+
+    [JsonPropertyName("shortTermMemory")]
+    public ShortTermMemoryDto ShortTermMemory { get; set; } = new();
+
+    [JsonPropertyName("workingMemory")]
+    public WorkingMemoryDto WorkingMemory { get; set; } = new();
 
     [JsonPropertyName("memory")]
     public Dictionary<string, FactDto> Memory { get; set; } = new(StringComparer.OrdinalIgnoreCase);
@@ -371,6 +443,35 @@ public static class ContextPersistence
             History = new HistoryDto
             {
                 Messages = agent.History.ToList(),
+            },
+            ShortTermMemory = new ShortTermMemoryDto
+            {
+                Entries = agent.MemoryManager.ShortTerm.GetAll().Select(e => new ShortTermEntryDto
+                {
+                    Role = e.Role,
+                    Content = e.Content,
+                    Metadata = e.Metadata,
+                    Timestamp = e.Timestamp,
+                }).ToList(),
+                MaxSize = agent.MemoryManager.ShortTerm.MaxSize,
+            },
+            WorkingMemory = new WorkingMemoryDto
+            {
+                Entries = agent.MemoryManager.Working.All.ToDictionary(
+                    kvp => kvp.Key,
+                    kvp => new WorkingEntryDto
+                    {
+                        Key = kvp.Value.Key,
+                        Value = kvp.Value.Value,
+                        Type = kvp.Value.Type,
+                        TaskId = kvp.Value.TaskId,
+                        CreatedAt = kvp.Value.CreatedAt,
+                        UpdatedAt = kvp.Value.UpdatedAt,
+                    },
+                    StringComparer.OrdinalIgnoreCase),
+                CurrentTaskId = agent.MemoryManager.Working.CurrentTaskId,
+                CurrentTaskStatus = agent.MemoryManager.Working.CurrentTaskStatus,
+                TaskStartedAt = agent.MemoryManager.Working.TaskStartedAt,
             },
             Memory = agent.Memory.All.ToDictionary(
                 kvp => kvp.Key,
@@ -493,7 +594,7 @@ public static class ContextPersistence
 
         var json = JsonSerializer.Serialize(context, JsonOptions);
         File.WriteAllText(ContextFilePath, json, Encoding.UTF8);
-        agent.Logger.Info($"Контекст сохранён в {ContextFilePath} ({agent.History.Count} сообщений, {agent.Memory.Count} фактов, {agent.Cache.Count} записей кэша)");
+        agent.Logger.Info($"Контекст сохранён в {ContextFilePath} ({agent.History.Count} сообщений, {agent.MemoryManager.ShortTerm.Count} кратк., {agent.MemoryManager.Working.Count} рабоч., {agent.Memory.Count} фактов, {agent.Cache.Count} записей кэша)");
     }
 
     /// <summary>
@@ -524,6 +625,31 @@ public static class ContextPersistence
             {
                 agent.LoadHistory(context.History.Messages);
             }
+
+            // Восстанавливаем краткосрочную память
+            foreach (var entry in context.ShortTermMemory.Entries)
+            {
+                agent.MemoryManager.ShortTerm.Add(entry.Role, entry.Content, entry.Metadata);
+            }
+            agent.MemoryManager.ShortTerm.MaxSize = context.ShortTermMemory.MaxSize;
+            agent.Logger.Info($"Восстановлена краткосрочная память: {agent.MemoryManager.ShortTerm.Count} записей");
+
+            // Восстанавливаем рабочую память
+            foreach (var kvp in context.WorkingMemory.Entries)
+            {
+                var entry = kvp.Value;
+                agent.MemoryManager.Working.Save(entry.Key, entry.Value, entry.Type);
+                if (agent.MemoryManager.Working.All.TryGetValue(kvp.Key, out var workingEntry))
+                {
+                    workingEntry.TaskId = entry.TaskId;
+                    workingEntry.CreatedAt = entry.CreatedAt;
+                    workingEntry.UpdatedAt = entry.UpdatedAt;
+                }
+            }
+            agent.MemoryManager.Working.CurrentTaskId = context.WorkingMemory.CurrentTaskId;
+            agent.MemoryManager.Working.CurrentTaskStatus = context.WorkingMemory.CurrentTaskStatus;
+            agent.MemoryManager.Working.TaskStartedAt = context.WorkingMemory.TaskStartedAt;
+            agent.Logger.Info($"Восстановлена рабочая память: {agent.MemoryManager.Working.Count} записей");
 
             // Восстанавливаем долгосрочную память
             foreach (var kvp in context.Memory)
