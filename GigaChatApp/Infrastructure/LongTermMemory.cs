@@ -25,7 +25,23 @@ public class LongTermMemory
     /// <summary>
     /// Сохранить факт. Если ключ уже существует — обновляет значение.
     /// </summary>
+    /// <param name="key">Ключ факта.</param>
+    /// <param name="value">Значение факта.</param>
+    /// <param name="source">Источник: user, extracted, explicit, migrated.</param>
     public void Save(string key, string value, string source = "user")
+    {
+        Save(key, value, source, FactPriority.Normal);
+    }
+
+    /// <summary>
+    /// Сохранить факт с указанием приоритета.
+    /// Факты с Priority.Critical никогда не удаляются при eviction.
+    /// </summary>
+    /// <param name="key">Ключ факта.</param>
+    /// <param name="value">Значение факта.</param>
+    /// <param name="source">Источник.</param>
+    /// <param name="priority">Приоритет факта.</param>
+    public void Save(string key, string value, string source, FactPriority priority)
     {
         var wasNew = !_facts.ContainsKey(key);
 
@@ -33,19 +49,22 @@ public class LongTermMemory
         {
             existing.Value = value;
             existing.Source = source;
+            if (priority != FactPriority.Normal)
+                existing.Priority = priority;
             existing.CreatedAt = DateTime.UtcNow;
             _logger.Info($"[Длг. память] Факт обновлён: {key} = \"{Truncate(value, 50)}\"");
         }
         else
         {
             // Если память переполнена — удаляем самый старый факт
+            // Приоритет Critical не удаляется
             if (_facts.Count >= MaxSize)
             {
-                var oldest = _facts.OrderBy(f => f.Value.CreatedAt).FirstOrDefault();
-                if (oldest.Key is not null)
+                var victim = FindEvictionVictim();
+                if (victim.Key is not null)
                 {
-                    _facts.Remove(oldest.Key);
-                    _logger.Info($"[Длг. память] Память переполнена, удалён факт: {oldest.Key}");
+                    _facts.Remove(victim.Key);
+                    _logger.Info($"[Длг. память] Память переполнена, удалён факт: {victim.Key} (приоритет: {victim.Value.Priority})");
                 }
             }
 
@@ -54,16 +73,41 @@ public class LongTermMemory
                 Key = key,
                 Value = value,
                 Source = source,
+                Priority = priority,
                 CreatedAt = DateTime.UtcNow,
             };
-            _logger.Info($"[Длг. память] Факт сохранён: {key} = \"{Truncate(value, 50)}\"");
+            _logger.Info($"[Длг. память] Факт сохранён: {key} = \"{Truncate(value, 50)}\" [приоритет: {priority}]");
         }
 
         // Сохраняем информацию о последнем изменении
         _lastChanges = new List<FactChange>
         {
-            new() { Key = key, WasNew = wasNew, Value = value, Source = source }
+            new() { Key = key, WasNew = wasNew, Value = value, Source = source, Priority = priority }
         };
+    }
+
+    /// <summary>
+    /// Находит факт для удаления (eviction).
+    /// Приоритет Critical пропускается — он никогда не удаляется.
+    /// Выбирается самый старый факт с наименьшим приоритетом.
+    /// </summary>
+    private (Fact Value, string? Key) FindEvictionVictim()
+    {
+        // Сортируем: сначала Critical (protected), затем по приоритету ASC, затем по CreatedAt ASC
+        var candidates = _facts
+            .Where(f => f.Value.Priority != FactPriority.Critical)
+            .OrderBy(f => f.Value.Priority)
+            .ThenBy(f => f.Value.CreatedAt)
+            .ToList();
+
+        if (candidates.Count == 0)
+        {
+            // Все факты Critical — возвращаем самый старый (крайний случай)
+            var oldest = _facts.OrderBy(f => f.Value.CreatedAt).FirstOrDefault();
+            return (oldest.Value, oldest.Key);
+        }
+
+        return (candidates[0].Value, candidates[0].Key);
     }
 
     /// <summary>
@@ -84,6 +128,7 @@ public class LongTermMemory
         public string Key { get; set; } = string.Empty;
         public string Value { get; set; } = string.Empty;
         public string Source { get; set; } = string.Empty;
+        public FactPriority Priority { get; set; }
         public bool WasNew { get; set; }
     }
 
@@ -148,6 +193,9 @@ public class LongTermMemory
 
             // Бонус за частоту использования (факт уже был релевантен раньше)
             score += fact.ReadCount * 2;
+
+            // Бонус за приоритет факта
+            score += (int)fact.Priority * 20;
 
             if (score > 0)
             {

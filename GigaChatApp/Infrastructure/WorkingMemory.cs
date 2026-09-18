@@ -6,11 +6,24 @@ namespace GigaChatApp.Infrastructure;
 /// Рабочая память — данные текущей задачи.
 /// Хранит план, промежуточные результаты, временные данные.
 /// Очищается при завершении задачи или переключении на новую.
+/// Поддерживает архивацию завершённых задач.
 /// </summary>
 public class WorkingMemory
 {
     private readonly Dictionary<string, WorkingEntry> _entries = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, List<WorkingEntry>> _archivedTasks = new(StringComparer.OrdinalIgnoreCase);
     private readonly AgentLogger _logger;
+
+    /// <summary>
+    /// Максимальное количество архивных записей на задачу.
+    /// При превышении oldest архивные записи удаляются.
+    /// </summary>
+    public int MaxArchiveSize { get; set; } = 10;
+
+    /// <summary>
+    /// Включить автоматическую архивацию при StartTask.
+    /// </summary>
+    public bool ArchiveEnabled { get; set; } = true;
 
     /// <summary>
     /// Идентификатор текущей задачи (сессии).
@@ -34,14 +47,76 @@ public class WorkingMemory
 
     /// <summary>
     /// Начать новую задачу. Очищает рабочую память от данных предыдущей задачи.
+    /// Если ArchiveEnabled = true, данные предыдущей задачи архивируются.
     /// </summary>
     public void StartTask(string taskId)
     {
-        Clear();
+        // Архивируем текущие данные перед очисткой
+        if (ArchiveEnabled && _entries.Count > 0 && CurrentTaskId is not null)
+        {
+            ArchiveCurrentTask();
+        }
+
+        _entries.Clear();
         CurrentTaskId = taskId;
         CurrentTaskStatus = "running";
         TaskStartedAt = DateTime.UtcNow;
         _logger.Info($"[Рабоч. память] Начата задача: {taskId}");
+    }
+
+    /// <summary>
+    /// Архивировать данные текущей задачи.
+    /// </summary>
+    public void ArchiveCurrentTask()
+    {
+        if (CurrentTaskId is null || _entries.Count == 0)
+            return;
+
+        var currentData = _entries.Values.ToList();
+
+        if (!_archivedTasks.ContainsKey(CurrentTaskId))
+        {
+            _archivedTasks[CurrentTaskId] = new List<WorkingEntry>();
+        }
+
+        _archivedTasks[CurrentTaskId].AddRange(currentData);
+
+        // Ограничиваем размер архива
+        if (_archivedTasks[CurrentTaskId].Count > MaxArchiveSize)
+        {
+            var removed = _archivedTasks[CurrentTaskId].Count - MaxArchiveSize;
+            _archivedTasks[CurrentTaskId].RemoveRange(0, removed);
+            _logger.Info($"[Рабоч. память] Архив задачи {CurrentTaskId}: удалено {removed} старых записей");
+        }
+
+        _logger.Info($"[Рабоч. память] Архивирована задача {CurrentTaskId}: {_entries.Count} записей");
+    }
+
+    /// <summary>
+    /// Загрузить архивные данные задачи.
+    /// </summary>
+    public IReadOnlyList<WorkingEntry> GetArchivedTask(string taskId)
+    {
+        if (_archivedTasks.TryGetValue(taskId, out var archived))
+        {
+            return archived.AsReadOnly();
+        }
+        return Array.Empty<WorkingEntry>();
+    }
+
+    /// <summary>
+    /// Получить все архивированные задачи.
+    /// </summary>
+    public IReadOnlyDictionary<string, List<WorkingEntry>> AllArchived => _archivedTasks;
+
+    /// <summary>
+    /// Очистить архив.
+    /// </summary>
+    public void ClearArchive()
+    {
+        var count = _archivedTasks.Count;
+        _archivedTasks.Clear();
+        _logger.Info($"[Рабоч. память] Архив очищен: {count} задач");
     }
 
     /// <summary>
@@ -190,6 +265,11 @@ public class WorkingMemory
     /// Количество записей.
     /// </summary>
     public int Count => _entries.Count;
+
+    /// <summary>
+    /// Количество архивированных задач.
+    /// </summary>
+    public int ArchivedTaskCount => _archivedTasks.Count;
 
     private static string Truncate(string value, int maxLength)
     {

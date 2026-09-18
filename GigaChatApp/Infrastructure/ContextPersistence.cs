@@ -34,6 +34,9 @@ internal class FactDto
     [JsonPropertyName("source")]
     public string Source { get; set; } = "user";
 
+    [JsonPropertyName("priority")]
+    public int Priority { get; set; } = 1;
+
     [JsonPropertyName("createdAt")]
     public DateTime CreatedAt { get; set; }
 
@@ -249,6 +252,15 @@ internal class WorkingMemoryDto
 
     [JsonPropertyName("taskStartedAt")]
     public DateTime? TaskStartedAt { get; set; }
+
+    [JsonPropertyName("archiveEnabled")]
+    public bool ArchiveEnabled { get; set; } = true;
+
+    [JsonPropertyName("maxArchiveSize")]
+    public int MaxArchiveSize { get; set; } = 10;
+
+    [JsonPropertyName("archivedTasks")]
+    public Dictionary<string, List<WorkingEntryDto>> ArchivedTasks { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 }
 
 internal class WorkingEntryDto
@@ -472,6 +484,20 @@ public static class ContextPersistence
                 CurrentTaskId = agent.MemoryManager.Working.CurrentTaskId,
                 CurrentTaskStatus = agent.MemoryManager.Working.CurrentTaskStatus,
                 TaskStartedAt = agent.MemoryManager.Working.TaskStartedAt,
+                ArchiveEnabled = agent.MemoryManager.Working.ArchiveEnabled,
+                MaxArchiveSize = agent.MemoryManager.Working.MaxArchiveSize,
+                ArchivedTasks = agent.MemoryManager.Working.AllArchived.ToDictionary(
+                    kvp => kvp.Key,
+                    kvp => kvp.Value.Select(e => new WorkingEntryDto
+                    {
+                        Key = e.Key,
+                        Value = e.Value,
+                        Type = e.Type,
+                        TaskId = e.TaskId,
+                        CreatedAt = e.CreatedAt,
+                        UpdatedAt = e.UpdatedAt,
+                    }).ToList(),
+                    StringComparer.OrdinalIgnoreCase),
             },
             Memory = agent.Memory.All.ToDictionary(
                 kvp => kvp.Key,
@@ -480,6 +506,7 @@ public static class ContextPersistence
                     Key = kvp.Value.Key,
                     Value = kvp.Value.Value,
                     Source = kvp.Value.Source,
+                    Priority = (int)kvp.Value.Priority,
                     CreatedAt = kvp.Value.CreatedAt,
                     LastReadAt = kvp.Value.LastReadAt,
                     ReadCount = kvp.Value.ReadCount,
@@ -649,15 +676,64 @@ public static class ContextPersistence
             agent.MemoryManager.Working.CurrentTaskId = context.WorkingMemory.CurrentTaskId;
             agent.MemoryManager.Working.CurrentTaskStatus = context.WorkingMemory.CurrentTaskStatus;
             agent.MemoryManager.Working.TaskStartedAt = context.WorkingMemory.TaskStartedAt;
-            agent.Logger.Info($"Восстановлена рабочая память: {agent.MemoryManager.Working.Count} записей");
+            agent.MemoryManager.Working.ArchiveEnabled = context.WorkingMemory.ArchiveEnabled;
+            agent.MemoryManager.Working.MaxArchiveSize = context.WorkingMemory.MaxArchiveSize;
+
+            // Восстанавливаем архив
+            foreach (var kvp in context.WorkingMemory.ArchivedTasks)
+            {
+                foreach (var entry in kvp.Value)
+                {
+                    var we = new WorkingEntry
+                    {
+                        Key = entry.Key,
+                        Value = entry.Value,
+                        Type = entry.Type,
+                        TaskId = entry.TaskId,
+                        CreatedAt = entry.CreatedAt,
+                        UpdatedAt = entry.UpdatedAt,
+                    };
+                    if (!context.WorkingMemory.ArchivedTasks.ContainsKey(kvp.Key))
+                    {
+                        context.WorkingMemory.ArchivedTasks[kvp.Key] = new List<WorkingEntryDto>();
+                    }
+                }
+                // Восстанавливаем через рефлексию, т.к. _archivedTasks приватный
+                var archivedField = typeof(WorkingMemory).GetField("_archivedTasks",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                if (archivedField?.GetValue(agent.MemoryManager.Working) is Dictionary<string, List<WorkingEntry>> archivedDict)
+                {
+                    foreach (var archKvp in kvp.Value)
+                    {
+                        var archEntry = new WorkingEntry
+                        {
+                            Key = archKvp.Key,
+                            Value = archKvp.Value,
+                            Type = archKvp.Type,
+                            TaskId = archKvp.TaskId,
+                            CreatedAt = archKvp.CreatedAt,
+                            UpdatedAt = archKvp.UpdatedAt,
+                        };
+                        if (!archivedDict.ContainsKey(kvp.Key))
+                        {
+                            archivedDict[kvp.Key] = new List<WorkingEntry>();
+                        }
+                        archivedDict[kvp.Key].Add(archEntry);
+                    }
+                }
+            }
+
+            agent.Logger.Info($"Восстановлена рабочая память: {agent.MemoryManager.Working.Count} записей, {agent.MemoryManager.Working.ArchivedTaskCount} архивных задач");
 
             // Восстанавливаем долгосрочную память
             foreach (var kvp in context.Memory)
             {
+                var priority = (FactPriority)kvp.Value.Priority;
                 agent.Memory.Save(
                     kvp.Value.Key,
                     kvp.Value.Value,
-                    kvp.Value.Source);
+                    kvp.Value.Source,
+                    priority);
 
                 // Восстанавливаем метрики чтения
                 if (agent.Memory.All.TryGetValue(kvp.Key, out var fact))
@@ -828,7 +904,7 @@ public static class ContextPersistence
                         {
                             if (!agent.MemoryManager.LongTerm.All.ContainsKey(kvp.Key))
                             {
-                                agent.MemoryManager.LongTerm.Save(kvp.Key, kvp.Value, "migrated");
+                                agent.MemoryManager.LongTerm.Save(kvp.Key, kvp.Value, "migrated", FactPriority.Normal);
                                 migratedCount++;
                             }
                         }
@@ -842,7 +918,7 @@ public static class ContextPersistence
                     {
                         if (!agent.MemoryManager.LongTerm.All.ContainsKey(kvp.Key))
                         {
-                            agent.MemoryManager.LongTerm.Save(kvp.Key, kvp.Value, "migrated");
+                            agent.MemoryManager.LongTerm.Save(kvp.Key, kvp.Value, "migrated", FactPriority.Normal);
                             migratedCount++;
                         }
                     }

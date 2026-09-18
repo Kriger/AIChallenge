@@ -74,6 +74,23 @@ var logger = new AgentLogger(LogLevel.Info);
 var cache = new RequestCache(maxSize: 100);
 var memoryManager = new MemoryManager(logger);
 
+// Применяем конфигурацию памяти из appsettings.json
+var memoryConfig = new MemoryConfig();
+configuration.GetSection("Memory").Bind(memoryConfig);
+
+memoryManager.ShortTerm.MaxSize = memoryConfig.ShortTerm.MaxSize;
+memoryManager.ShortTerm.DecayEnabled = memoryConfig.ShortTerm.DecayEnabled;
+memoryManager.ShortTerm.DecayAfterHours = memoryConfig.ShortTerm.DecayAfterHours;
+memoryManager.Working.ArchiveEnabled = memoryConfig.Working.ArchiveEnabled;
+memoryManager.Working.MaxArchiveSize = memoryConfig.Working.MaxArchiveSize;
+memoryManager.LongTerm.MaxSize = memoryConfig.LongTerm.MaxSize;
+
+Console.WriteLine($"📦 Конфигурация памяти:");
+Console.WriteLine($"   Краткосрочная: max={memoryConfig.ShortTerm.MaxSize}, decay={(memoryConfig.ShortTerm.DecayEnabled ? "вкл" : "выкл")}");
+Console.WriteLine($"   Рабочая: archive={(memoryConfig.Working.ArchiveEnabled ? "вкл" : "выкл")}, max_archive={memoryConfig.Working.MaxArchiveSize}");
+Console.WriteLine($"   Долгосрочная: max={memoryConfig.LongTerm.MaxSize}");
+Console.WriteLine();
+
 // Инициализация управления контекстом
 var contextConfig = new ContextManagerConfig
 {
