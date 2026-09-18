@@ -50,19 +50,26 @@ public class ContextManager
         ChatClient chatClient,
         AuthClient authClient,
         AgentLogger logger,
-        ContextManagerConfig? config = null)
+        ContextManagerConfig? config = null,
+        int? stickyFactsWindowSize = null,
+        int? stickyFactsMaxFacts = null)
     {
         _chatClient = chatClient;
         _authClient = authClient;
         _logger = logger;
         _config = config ?? new ContextManagerConfig();
 
-        // Инициализируем все стратегии
-        _slidingWindow = new SlidingWindowStrategy(_config.RecentMessageCount);
-        _stickyFacts = new StickyFactsStrategy(chatClient, authClient, logger, _config.RecentMessageCount);
+        // Инициализируем все стратегии с настройками из конфига
+        var slidingWindowSize = _config.RecentMessageCount;
+        _slidingWindow = new SlidingWindowStrategy(slidingWindowSize);
+
+        var stickyWindowSize = stickyFactsWindowSize ?? _config.RecentMessageCount;
+        var stickyMaxFacts = stickyFactsMaxFacts ?? 50;
+        _stickyFacts = new StickyFactsStrategy(chatClient, authClient, logger, stickyWindowSize, stickyMaxFacts);
+
         _branching = new BranchingStrategy();
 
-        // По умолчанию — legacy summary-режим (как было раньше)
+        // По умолчанию — SlidingWindow
         CurrentStrategy = ContextStrategy.SlidingWindow;
     }
 

@@ -34,11 +34,12 @@ internal class FactDto
 
 /// <summary>
 /// Персистентность долгосрочной памяти (знания, факты).
-/// Сохраняет/загружает из long_term.json.
+/// Сохраняет/загружает из memory/long_term/facts.json.
 /// </summary>
 public static class LongTermPersistence
 {
-    private const string FileName = "long_term.json";
+    private const string MemoryDir = "memory/long_term";
+    private const string FileName = "facts.json";
 
     private static readonly JsonSerializerOptions Options = new()
     {
@@ -47,13 +48,25 @@ public static class LongTermPersistence
         PropertyNameCaseInsensitive = true,
     };
 
-    public static string FilePath => Path.GetFullPath(FileName);
+    public static string FilePath => Path.GetFullPath(Path.Combine(MemoryDir, FileName));
+
+    /// <summary>
+    /// Гарантирует, что директория long_term существует.
+    /// </summary>
+    private static void EnsureDirectory()
+    {
+        var dir = Path.GetDirectoryName(FilePath);
+        if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+            Directory.CreateDirectory(dir);
+    }
 
     /// <summary>
     /// Сохраняет долгосрочную память в JSON-файл.
     /// </summary>
     public static void Save(LongTermMemory memory)
     {
+        EnsureDirectory();
+
         var facts = memory.All.ToDictionary(
             kvp => kvp.Key,
             kvp => new FactDto

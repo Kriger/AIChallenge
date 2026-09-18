@@ -87,4 +87,131 @@ public class GigaChatConfig
     /// false = все запросы обрабатываются напрямую, без разбивки на подзадачи.
     /// </summary>
     public bool PlannerEnabled { get; set; } = true;
+
+    // === Настройки контекста ===
+
+    /// <summary>
+    /// Конфигурация управления контекстом.
+    /// </summary>
+    public ContextConfig Context { get; set; } = new();
+}
+
+/// <summary>
+/// Конфигурация управления контекстом.
+/// </summary>
+public class ContextConfig
+{
+    /// <summary>
+    /// Включено ли управление контекстом.
+    /// false = полная история без сжатия.
+    /// </summary>
+    public bool Enabled { get; set; } = false;
+
+    /// <summary>
+    /// Активная стратегия: SlidingWindow, StickyFacts, Branching.
+    /// </summary>
+    public string Strategy { get; set; } = "SlidingWindow";
+
+    /// <summary>
+    /// Настройки стратегии Sliding Window.
+    /// </summary>
+    public SlidingWindowConfig SlidingWindow { get; set; } = new();
+
+    /// <summary>
+    /// Настройки стратегии Sticky Facts.
+    /// </summary>
+    public StickyFactsConfig StickyFacts { get; set; } = new();
+
+    /// <summary>
+    /// Настройки стратегии Branching.
+    /// </summary>
+    public BranchingConfig Branching { get; set; } = new();
+
+    /// <summary>
+    /// Общие настройки summary (legacy-режим).
+    /// </summary>
+    public SummaryConfig Summary { get; set; } = new();
+
+    /// <summary>
+    /// Загружает конфигурацию из IConfiguration.
+    /// </summary>
+    public static ContextConfig Load(IConfigurationSection section)
+    {
+        var result = new ContextConfig();
+
+        section.Bind(result);
+
+        // Вложенные объекты — загружаем отдельно, так как Bind() не инициализирует их
+        result.SlidingWindow = section.GetSection("SlidingWindow").Get<SlidingWindowConfig>() ?? new SlidingWindowConfig();
+        result.StickyFacts = section.GetSection("StickyFacts").Get<StickyFactsConfig>() ?? new StickyFactsConfig();
+        result.Branching = section.GetSection("Branching").Get<BranchingConfig>() ?? new BranchingConfig();
+        result.Summary = section.GetSection("Summary").Get<SummaryConfig>() ?? new SummaryConfig();
+
+        return result;
+    }
+}
+
+/// <summary>
+/// Настройки Sliding Window стратегии.
+/// </summary>
+public class SlidingWindowConfig
+{
+    /// <summary>
+    /// Размер окна — количество последних сообщений, которые хранятся "как есть".
+    /// </summary>
+    public int WindowSize { get; set; } = 10;
+}
+
+/// <summary>
+/// Настройки Sticky Facts стратегии.
+/// </summary>
+public class StickyFactsConfig
+{
+    /// <summary>
+    /// Размер окна — количество последних сообщений, которые хранятся "как есть".
+    /// </summary>
+    public int WindowSize { get; set; } = 10;
+
+    /// <summary>
+    /// Максимальное количество фактов, которые хранятся.
+    /// </summary>
+    public int MaxFacts { get; set; } = 50;
+}
+
+/// <summary>
+/// Настройки Branching стратегии.
+/// </summary>
+public class BranchingConfig
+{
+    /// <summary>
+    /// Максимальное количество веток. 0 = без ограничения.
+    /// </summary>
+    public int MaxBranches { get; set; } = 0;
+
+    /// <summary>
+    /// Максимальное количество чекпоинтов. 0 = без ограничения.
+    /// </summary>
+    public int MaxCheckpoints { get; set; } = 0;
+}
+
+/// <summary>
+/// Общие настройки summary (legacy-режим сжатия).
+/// </summary>
+public class SummaryConfig
+{
+    /// <summary>
+    /// Интервал создания summary (каждые N сообщений).
+    /// </summary>
+    public int Interval { get; set; } = 10;
+
+    /// <summary>
+    /// Максимальное количество summary, которые хранятся.
+    /// </summary>
+    public int MaxSummaries { get; set; } = 20;
+
+    /// <summary>
+    /// Максимальное общее количество токенов для контекста.
+    /// 0 = без ограничения.
+    /// </summary>
+    public int MaxContextTokens { get; set; } = 0;
 }

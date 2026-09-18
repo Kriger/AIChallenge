@@ -21,11 +21,12 @@ internal class CachedEntryDto
 
 /// <summary>
 /// Персистентность кэша ответов.
-/// Сохраняет/загружает из cache.json.
+/// Сохраняет/загружает из memory/cache.json.
 /// Просроченные записи не сохраняются.
 /// </summary>
 public static class CachePersistence
 {
+    private const string MemoryDir = "memory";
     private const string FileName = "cache.json";
 
     private static readonly JsonSerializerOptions Options = new()
@@ -35,7 +36,17 @@ public static class CachePersistence
         PropertyNameCaseInsensitive = true,
     };
 
-    public static string FilePath => Path.GetFullPath(FileName);
+    public static string FilePath => Path.GetFullPath(Path.Combine(MemoryDir, FileName));
+
+    /// <summary>
+    /// Гарантирует, что директория memory существует.
+    /// </summary>
+    private static void EnsureDirectory()
+    {
+        var dir = Path.GetDirectoryName(FilePath);
+        if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+            Directory.CreateDirectory(dir);
+    }
 
     /// <summary>
     /// Сохраняет кэш в JSON-файл.
@@ -43,6 +54,8 @@ public static class CachePersistence
     /// </summary>
     public static void Save(RequestCache cache)
     {
+        EnsureDirectory();
+
         // Используем рефлексию для доступа к приватному ConcurrentDictionary
         var cacheField = typeof(RequestCache).GetField("_cache",
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);

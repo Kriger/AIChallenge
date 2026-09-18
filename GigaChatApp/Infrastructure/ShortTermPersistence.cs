@@ -45,11 +45,12 @@ internal class ShortTermMemoryDto
 
 /// <summary>
 /// Персистентность краткосрочной памяти (диалог).
-/// Сохраняет/загружает из short_term.json.
+/// Сохраняет/загружает из memory/short_term/entries.json.
 /// </summary>
 public static class ShortTermPersistence
 {
-    private const string FileName = "short_term.json";
+    private const string MemoryDir = "memory/short_term";
+    private const string FileName = "entries.json";
 
     private static readonly JsonSerializerOptions Options = new()
     {
@@ -58,13 +59,25 @@ public static class ShortTermPersistence
         PropertyNameCaseInsensitive = true,
     };
 
-    public static string FilePath => Path.GetFullPath(FileName);
+    public static string FilePath => Path.GetFullPath(Path.Combine(MemoryDir, FileName));
+
+    /// <summary>
+    /// Гарантирует, что директория short_term существует.
+    /// </summary>
+    private static void EnsureDirectory()
+    {
+        var dir = Path.GetDirectoryName(FilePath);
+        if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+            Directory.CreateDirectory(dir);
+    }
 
     /// <summary>
     /// Сохраняет краткосрочную память в JSON-файл.
     /// </summary>
     public static void Save(ShortTermMemory memory)
     {
+        EnsureDirectory();
+
         var dto = new ShortTermMemoryDto
         {
             Entries = memory.GetAll().Select(e => new ShortTermEntryDto

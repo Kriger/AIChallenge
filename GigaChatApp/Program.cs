@@ -18,6 +18,7 @@ var builder = new ConfigurationBuilder()
 var configuration = builder.Build();
 var config = new GigaChatConfig();
 configuration.GetSection("GigaChat").Bind(config);
+config.Context = ContextConfig.Load(configuration.GetSection("Context"));
 
 if (string.IsNullOrEmpty(config.ClientId))
 {
@@ -53,6 +54,7 @@ Console.WriteLine("   Память: /memory list, /memory save <ключ> <зн�
 Console.WriteLine("   Контекст: /context (статус), /context strategy (список), /context strategy <sliding|sticky|branching>");
 Console.WriteLine("   Факты: /facts list, /facts save <ключ> <значение>, /facts delete <ключ>");
 Console.WriteLine("   Ветки: /branch list, /branch create <имя>, /branch switch <id>, /branch checkpoint <имя>, /branch create-from <cp-id> <имя>, /branch delete <id>");
+Console.WriteLine("   Профиль: /agent-profile (статус), /agent-profile name/role/style/format/language/depth/domain, /agent-profile tech add/remove/list/clear, /agent-profile constraint/req/instructions/reset");
 Console.WriteLine("   Очистка: /clear | Сохранить: /save | Выход: quit / exit / q");
 Console.WriteLine("   По умолчанию ограничений нет — задайте через команды выше.");
 Console.WriteLine();
@@ -94,26 +96,41 @@ Console.WriteLine();
 // Инициализация управления контекстом
 var contextConfig = new ContextManagerConfig
 {
-    Enabled = config.ContextCompressionEnabled,
-    RecentMessageCount = config.ContextRecentMessageCount,
-    SummaryInterval = config.ContextSummaryInterval,
-    MaxSummaries = config.ContextMaxSummaries,
-    MaxContextTokens = config.ContextMaxTokens,
+    Enabled = config.Context.Enabled,
+    RecentMessageCount = config.Context.SlidingWindow.WindowSize,
+    SummaryInterval = config.Context.Summary.Interval,
+    MaxSummaries = config.Context.Summary.MaxSummaries,
+    MaxContextTokens = config.Context.Summary.MaxContextTokens,
 };
 
 // Применяем стратегию из конфига
-if (Enum.TryParse(config.ContextStrategy, ignoreCase: true, out ContextStrategy strategy))
+if (Enum.TryParse(config.Context.Strategy, ignoreCase: true, out ContextStrategy strategy))
 {
     contextConfig.Strategy = strategy;
     Console.WriteLine($"📦 Стратегия контекста: {strategy}");
 }
 else
 {
-    Console.WriteLine($"❌ Неизвестная стратегия: {config.ContextStrategy}, используем SlidingWindow");
+    Console.WriteLine($"❌ Неизвестная стратегия: '{config.Context.Strategy}', используем SlidingWindow");
     contextConfig.Strategy = ContextStrategy.SlidingWindow;
 }
 
-var contextManager = new ContextManager(chatClient, authClient, logger, contextConfig);
+// Настройки стратегии StickyFacts
+int stickyFactsWindowSize = config.Context.StickyFacts.WindowSize;
+int stickyFactsMaxFacts = config.Context.StickyFacts.MaxFacts;
+
+// Настройки Branching
+int maxBranches = config.Context.Branching.MaxBranches;
+int maxCheckpoints = config.Context.Branching.MaxCheckpoints;
+
+var contextManager = new ContextManager(
+    chatClient,
+    authClient,
+    logger,
+    contextConfig,
+    stickyFactsWindowSize,
+    stickyFactsMaxFacts
+);
 var agent = new ChatAgent(chatClient, authClient, cache, logger, memoryManager, null, null, contextManager);
 var adaptive = new AdaptiveBehavior(agent.Metrics, cache, logger);
 var planner = new Planner(chatClient, authClient, config.Model, logger, memoryManager);
@@ -121,21 +138,45 @@ agent.Adaptive = adaptive;
 agent.Planner = planner;
 agent.Config = config;
 
-// Инициализация агента из config
+// Загрузка профиля агента — всегда из profiles/agent_profile.json
+agent.AgentProfile = AgentProfileManager.Load("default");
+Console.WriteLine($"🤖 Профиль агента загружен: {agent.AgentProfile.Name} (стиль: {agent.AgentProfile.Style}, формат: {agent.AgentProfile.Format}, глубина: {agent.AgentProfile.Depth})");
+
+// API-параметры — из конфига (не относятся к профилю агента)
 agent.Model = config.Model;
-agent.SystemMessage = config.SystemMessage;
-agent.MaxTokens = agent.MaxTokens;
 agent.Temperature = config.Temperature;
 agent.StopSequences = config.StopSequences;
+
+// SystemMessage формируется из профиля агента — не берём из конфига
+agent.SystemMessage = string.Empty;
 
 agent.Metrics.ContextCompressionEnabled = contextConfig.Enabled;
 
 // Загружаем стратегию из config
-if (Enum.TryParse(config.ContextStrategy, ignoreCase: true, out ContextStrategy loadedStrategy))
+if (Enum.TryParse(config.Context.Strategy, ignoreCase: true, out ContextStrategy loadedStrategy))
 {
     agent.ContextManager.SetStrategy(loadedStrategy);
     agent.ContextManager.Config.Strategy = loadedStrategy;
     Console.WriteLine($"✅ Стратегия контекста: {loadedStrategy}");
+}
+else
+{
+    Console.WriteLine($"⚠️  Неизвестная стратегия в config: '{config.Context.Strategy}', используем SlidingWindow");
+    agent.ContextManager.SetStrategy(ContextStrategy.SlidingWindow);
+    agent.ContextManager.Config.Strategy = ContextStrategy.SlidingWindow;
+}
+
+// Применяем настройки стратегии StickyFacts
+if (agent.ContextManager.StickyFacts is { } stickyFacts)
+{
+    // Обновляем window size через рефлексию или перезагрузку
+    Console.WriteLine($"   StickyFacts: window={stickyFactsWindowSize}, maxFacts={stickyFactsMaxFacts}");
+}
+
+// Применяем настройки Branching
+if (agent.ContextManager.Branching is { } branching)
+{
+    Console.WriteLine($"   Branching: maxBranches={maxBranches}, maxCheckpoints={maxCheckpoints}");
 }
 else
 {
@@ -177,6 +218,10 @@ while (true)
     {
         // Сохраняем контекст перед выходом
         ContextPersistence.SaveContext(agent);
+
+        // Сохраняем профиль агента
+        AgentProfileManager.Save(agent.AgentProfile);
+        Console.WriteLine($"💾 Профиль агента сохранён: {agent.AgentProfile.Name}");
 
         Console.WriteLine();
         Console.ForegroundColor = ConsoleColor.Gray;
@@ -220,6 +265,20 @@ while (true)
                 Console.WriteLine($"   MaxTokens: {agent.MaxTokens}");
                 Console.WriteLine($"   StopSequences: [{string.Join(", ", agent.StopSequences.Select(s => $"\"{s}\""))}]");
                 Console.WriteLine($"   SystemMessage: {agent.SystemMessage}");
+                Console.WriteLine();
+
+                // Профиль агента
+                Console.ForegroundColor = ConsoleColor.Cyan;
+                Console.WriteLine("🤖 Профиль агента:");
+                Console.ResetColor();
+                var prof = agent.AgentProfile;
+                Console.WriteLine($"   Имя: {prof.Name}");
+                if (!string.IsNullOrWhiteSpace(prof.Role))
+                    Console.WriteLine($"   Роль: {prof.Role}");
+                Console.WriteLine($"   Стиль: {prof.Style} | Формат: {prof.Format} | Язык: {prof.Language}");
+                Console.WriteLine($"   Глубина: {prof.Depth} | Домен: {(string.IsNullOrWhiteSpace(prof.Domain) ? "(не задан)" : prof.Domain)}");
+                if (prof.PreferredTechnologies.Count > 0)
+                    Console.WriteLine($"   Технологии: {string.Join(", ", prof.PreferredTechnologies)}");
                 Console.WriteLine();
 
                 // Статус контекста
@@ -1156,13 +1215,23 @@ while (true)
 
                     var cm = agent.ContextManager;
                     var cfg = cm.Config;
-                    Console.WriteLine($"   Стратегия: {cfg.Strategy}");
-                    Console.WriteLine($"   Recent сообщений: {cfg.RecentMessageCount}");
+                    Console.WriteLine($"   Включено: {(cfg.Enabled ? "да" : "нет")}");
+                    Console.WriteLine($"   Активная стратегия: {cfg.Strategy}");
+                    Console.WriteLine();
+
+                    // Настройки каждой стратегии
+                    Console.ForegroundColor = ConsoleColor.Cyan;
+                    Console.WriteLine("   Настройки стратегий:");
+                    Console.ResetColor();
+                    Console.WriteLine($"   SlidingWindow:     window={config.Context.SlidingWindow.WindowSize}");
+                    Console.WriteLine($"   StickyFacts:       window={config.Context.StickyFacts.WindowSize}, maxFacts={config.Context.StickyFacts.MaxFacts}");
+                    Console.WriteLine($"   Branching:         maxBranches={config.Context.Branching.MaxBranches}, maxCheckpoints={config.Context.Branching.MaxCheckpoints}");
+                    Console.WriteLine($"   Summary (legacy):  interval={config.Context.Summary.Interval}, maxSummaries={config.Context.Summary.MaxSummaries}");
 
                     // Статус активной стратегии
                     Console.WriteLine();
                     Console.ForegroundColor = ConsoleColor.Cyan;
-                    Console.WriteLine("   Активная стратегия:");
+                    Console.WriteLine("   Статус активной стратегии:");
                     Console.ResetColor();
                     Console.WriteLine(cm.GetStrategyStatus());
 
@@ -1403,6 +1472,363 @@ while (true)
                 }
                 continue;
 
+            // === Команды профиля агента ===
+            case "/agent-profile":
+                if (parts.Length < 2)
+                {
+                    // Показываем статус профиля
+                    Console.ForegroundColor = ConsoleColor.Yellow;
+                    Console.WriteLine("🤖 Профиль агента:");
+                    Console.ResetColor();
+                    var p = agent.AgentProfile;
+                    Console.WriteLine($"   Имя: {p.Name}");
+                    Console.WriteLine($"   Стиль: {p.Style}");
+                    Console.WriteLine($"   Формат: {p.Format}");
+                    Console.WriteLine($"   Язык: {p.Language}");
+                    Console.WriteLine($"   Глубина: {p.Depth}");
+                    Console.WriteLine($"   Домен: {(string.IsNullOrWhiteSpace(p.Domain) ? "(не задан)" : p.Domain)}");
+                    Console.WriteLine($"   Предпочитаемые технологии: {(p.PreferredTechnologies.Count == 0 ? "(нет)" : string.Join(", ", p.PreferredTechnologies))}");
+                    Console.WriteLine($"   Избегаемые технологии: {(p.AvoidedTechnologies.Count == 0 ? "(нет)" : string.Join(", ", p.AvoidedTechnologies))}");
+                    Console.WriteLine($"   Макс. длина ответа: {(p.MaxResponseLength == 0 ? "(нет)" : p.MaxResponseLength + " слов")}");
+                    Console.WriteLine($"   Ограничения: {(p.ResponseConstraints.Count == 0 ? "(нет)" : string.Join(", ", p.ResponseConstraints))}");
+                    Console.WriteLine($"   Требования: {(p.ResponseRequirements.Count == 0 ? "(нет)" : string.Join(", ", p.ResponseRequirements))}");
+                    Console.WriteLine($"   Инструкции: {(string.IsNullOrWhiteSpace(p.Instructions) ? "(нет)" : p.Instructions)}");
+                    Console.WriteLine();
+                    Console.WriteLine("   Команды:");
+                    Console.WriteLine("   /agent-profile name <имя> — изменить имя");
+                    Console.WriteLine("   /agent-profile style <concise|detailed|balanced> — стиль общения");
+                    Console.WriteLine("   /agent-profile format <markdown|plaintext|codeonly|structured> — формат ответов");
+                    Console.WriteLine("   /agent-profile language <russian|english|auto> — язык ответов");
+                    Console.WriteLine("   /agent-profile depth <beginner|intermediate|expert> — глубина ответов");
+                    Console.WriteLine("   /agent-profile domain <домен> — доменная область");
+                    Console.WriteLine("   /agent-profile tech add|remove|list|clear <технология> — технологии");
+                    Console.WriteLine("   /agent-profile constraint <текст> — ограничение в ответе");
+                    Console.WriteLine("   /agent-profile req <текст> — обязательный элемент ответа");
+                    Console.WriteLine("   /agent-profile instructions <текст> — дополнительные инструкции");
+                    Console.WriteLine("   /agent-profile reset — сбросить профиль к значениям по умолчанию");
+                    Console.WriteLine();
+                    continue;
+                }
+
+                var profileCommand = parts[1].ToLowerInvariant();
+
+                switch (profileCommand)
+                {
+                    case "name":
+                        if (parts.Length < 3)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine("❌ Формат: /agent-profile name <имя>");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                            break;
+                        }
+                        agent.AgentProfile.Name = string.Join(" ", parts.Skip(2));
+                        AgentProfileManager.Save(agent.AgentProfile);
+                        Console.ForegroundColor = ConsoleColor.Green;
+                        Console.WriteLine($"✅ Имя изменено на: {agent.AgentProfile.Name}");
+                        Console.ResetColor();
+                        Console.WriteLine();
+                        break;
+
+                    case "style":
+                        if (parts.Length < 3)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine("❌ Формат: /agent-profile style <concise|detailed|balanced>");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                            break;
+                        }
+                        if (Enum.TryParse<CommunicationStyle>(parts[2], ignoreCase: true, out var newStyle))
+                        {
+                            agent.AgentProfile.Style = newStyle;
+                            AgentProfileManager.Save(agent.AgentProfile);
+                            Console.ForegroundColor = ConsoleColor.Green;
+                            Console.WriteLine($"✅ Стиль изменён на: {newStyle}");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                        }
+                        else
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine($"❌ Неизвестный стиль: '{parts[2]}'. Доступны: concise, detailed, balanced");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                        }
+                        break;
+
+                    case "format":
+                        if (parts.Length < 3)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine("❌ Формат: /agent-profile format <markdown|plaintext|codeonly|structured>");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                            break;
+                        }
+                        if (Enum.TryParse<OutputFormat>(parts[2], ignoreCase: true, out var newFormat))
+                        {
+                            agent.AgentProfile.Format = newFormat;
+                            AgentProfileManager.Save(agent.AgentProfile);
+                            Console.ForegroundColor = ConsoleColor.Green;
+                            Console.WriteLine($"✅ Формат изменён на: {newFormat}");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                        }
+                        else
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine($"❌ Неизвестный формат: '{parts[2]}'. Доступны: markdown, plaintext, codeonly, structured");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                        }
+                        break;
+
+                    case "language":
+                        if (parts.Length < 3)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine("❌ Формат: /agent-profile language <russian|english|auto>");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                            break;
+                        }
+                        if (Enum.TryParse<ResponseLanguage>(parts[2], ignoreCase: true, out var newLang))
+                        {
+                            agent.AgentProfile.Language = newLang;
+                            AgentProfileManager.Save(agent.AgentProfile);
+                            Console.ForegroundColor = ConsoleColor.Green;
+                            Console.WriteLine($"✅ Язык изменён на: {newLang}");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                        }
+                        else
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine($"❌ Неизвестный язык: '{parts[2]}'. Доступны: russian, english, auto");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                        }
+                        break;
+
+                    case "depth":
+                        if (parts.Length < 3)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine("❌ Формат: /agent-profile depth <beginner|intermediate|expert>");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                            break;
+                        }
+                        if (Enum.TryParse<ExpertiseLevel>(parts[2], ignoreCase: true, out var newExp))
+                        {
+                            agent.AgentProfile.Depth = newExp;
+                            AgentProfileManager.Save(agent.AgentProfile);
+                            Console.ForegroundColor = ConsoleColor.Green;
+                            Console.WriteLine($"✅ Глубина изменён на: {newExp}");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                        }
+                        else
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine($"❌ Неизвестный уровень: '{parts[2]}'. Доступны: beginner, intermediate, expert");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                        }
+                        break;
+
+                    case "domain":
+                        if (parts.Length < 3)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine("❌ Формат: /agent-profile domain <домен>. Пример: /agent-profile domain .NET");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                            break;
+                        }
+                        agent.AgentProfile.Domain = string.Join(" ", parts.Skip(2));
+                        AgentProfileManager.Save(agent.AgentProfile);
+                        Console.ForegroundColor = ConsoleColor.Green;
+                        Console.WriteLine($"✅ Домен изменён на: {agent.AgentProfile.Domain}");
+                        Console.ResetColor();
+                        Console.WriteLine();
+                        break;
+
+                    case "tech":
+                        if (parts.Length < 3)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine("❌ Формат: /agent-profile tech <add|remove|list|clear> [технология]");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                            break;
+                        }
+                        var techAction = parts[2].ToLowerInvariant();
+                        switch (techAction)
+                        {
+                            case "add":
+                                if (parts.Length < 4)
+                                {
+                                    Console.ForegroundColor = ConsoleColor.Red;
+                                    Console.WriteLine("❌ Формат: /agent-profile tech add <технология>");
+                                    Console.ResetColor();
+                                    Console.WriteLine();
+                                    break;
+                                }
+                                var techToAdd = string.Join(" ", parts.Skip(3));
+                                if (!agent.AgentProfile.PreferredTechnologies.Contains(techToAdd, StringComparer.OrdinalIgnoreCase))
+                                {
+                                    agent.AgentProfile.PreferredTechnologies.Add(techToAdd);
+                                    AgentProfileManager.Save(agent.AgentProfile);
+                                    Console.ForegroundColor = ConsoleColor.Green;
+                                    Console.WriteLine($"✅ Добавлена предпочитаемая технология: {techToAdd}");
+                                }
+                                else
+                                {
+                                    Console.ForegroundColor = ConsoleColor.Yellow;
+                                    Console.WriteLine($"⚠️  Технология '{techToAdd}' уже есть в списке");
+                                }
+                                Console.ResetColor();
+                                Console.WriteLine();
+                                break;
+
+                            case "remove":
+                                if (parts.Length < 4)
+                                {
+                                    Console.ForegroundColor = ConsoleColor.Red;
+                                    Console.WriteLine("❌ Формат: /agent-profile tech remove <технология>");
+                                    Console.ResetColor();
+                                    Console.WriteLine();
+                                    break;
+                                }
+                                var techToRemove = string.Join(" ", parts.Skip(3));
+                                var countBefore = agent.AgentProfile.PreferredTechnologies.Count;
+                                agent.AgentProfile.PreferredTechnologies.RemoveAll(t => t.Equals(techToRemove, StringComparison.OrdinalIgnoreCase));
+                                if (agent.AgentProfile.PreferredTechnologies.Count < countBefore)
+                                {
+                                    AgentProfileManager.Save(agent.AgentProfile);
+                                    Console.ForegroundColor = ConsoleColor.Green;
+                                    Console.WriteLine($"✅ Удалена предпочитаемая технология: {techToRemove}");
+                                }
+                                else
+                                {
+                                    Console.ForegroundColor = ConsoleColor.Yellow;
+                                    Console.WriteLine($"⚠️  Технология '{techToRemove}' не найдена в списке");
+                                }
+                                Console.ResetColor();
+                                Console.WriteLine();
+                                break;
+
+                            case "list":
+                                Console.ForegroundColor = ConsoleColor.Yellow;
+                                Console.WriteLine("📦 Предпочитаемые технологии:");
+                                Console.ResetColor();
+                                if (agent.AgentProfile.PreferredTechnologies.Count == 0)
+                                {
+                                    Console.WriteLine("   (пусто)");
+                                }
+                                else
+                                {
+                                    foreach (var tech in agent.AgentProfile.PreferredTechnologies)
+                                    {
+                                        Console.WriteLine($"   • {tech}");
+                                    }
+                                }
+                                Console.WriteLine();
+                                break;
+
+                            case "clear":
+                                agent.AgentProfile.PreferredTechnologies.Clear();
+                                AgentProfileManager.Save(agent.AgentProfile);
+                                Console.ForegroundColor = ConsoleColor.Green;
+                                Console.WriteLine("✅ Список предпочитаемых технологий очищен");
+                                Console.ResetColor();
+                                Console.WriteLine();
+                                break;
+
+                            default:
+                                Console.ForegroundColor = ConsoleColor.Red;
+                                Console.WriteLine($"❌ Неизвестное действие: {techAction}. Доступны: add, remove, list, clear");
+                                Console.ResetColor();
+                                Console.WriteLine();
+                                break;
+                        }
+                        break;
+
+                    case "constraint":
+                        if (parts.Length < 3)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine("❌ Формат: /agent-profile constraint <ограничение>");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                            break;
+                        }
+                        var constraint = string.Join(" ", parts.Skip(2));
+                        agent.AgentProfile.ResponseConstraints.Add(constraint);
+                        AgentProfileManager.Save(agent.AgentProfile);
+                        Console.ForegroundColor = ConsoleColor.Green;
+                        Console.WriteLine($"✅ Ограничение добавлено: {constraint}");
+                        Console.ResetColor();
+                        Console.WriteLine();
+                        break;
+
+                    case "req":
+                    case "requirement":
+                        if (parts.Length < 3)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine("❌ Формат: /agent-profile req <требование>");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                            break;
+                        }
+                        var requirement = string.Join(" ", parts.Skip(2));
+                        agent.AgentProfile.ResponseRequirements.Add(requirement);
+                        AgentProfileManager.Save(agent.AgentProfile);
+                        Console.ForegroundColor = ConsoleColor.Green;
+                        Console.WriteLine($"✅ Требование добавлено: {requirement}");
+                        Console.ResetColor();
+                        Console.WriteLine();
+                        break;
+
+                    case "instructions":
+                        if (parts.Length < 3)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine("❌ Формат: /agent-profile instructions <заметки>");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                            break;
+                        }
+                        agent.AgentProfile.Instructions = string.Join(" ", parts.Skip(2));
+                        AgentProfileManager.Save(agent.AgentProfile);
+                        Console.ForegroundColor = ConsoleColor.Green;
+                        Console.WriteLine($"✅ Инструкции обновлены");
+                        Console.ResetColor();
+                        Console.WriteLine();
+                        break;
+
+                    case "reset":
+                        agent.AgentProfile = AgentProfileManager.Load("default");
+                        AgentProfileManager.Save(agent.AgentProfile);
+                        Console.ForegroundColor = ConsoleColor.Green;
+                        Console.WriteLine("✅ Профиль агента сброшен к значениям по умолчанию");
+                        Console.ResetColor();
+                        Console.WriteLine();
+                        break;
+
+                    default:
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine($"❌ Неизвестная команда профиля: {profileCommand}. Введи /profile для подсказки.");
+                        Console.ResetColor();
+                        Console.WriteLine();
+                        break;
+                }
+                continue;
+
             case "/save":
                 {
                     Console.ForegroundColor = ConsoleColor.Yellow;
@@ -1411,30 +1837,24 @@ while (true)
 
                     var files = new List<string>();
 
-                    // История
-                    var historyPath = Path.GetFullPath("dialog.json");
+                    // Сохраняем контекст
                     ContextPersistence.SaveContext(agent);
 
-                    // Собираем список созданных/обновлённых файлов
-                    foreach (var path in new[] {
-                        "dialog.json",
-                        "short_term.json",
-                        "working.json",
-                        "long_term.json",
-                        "cache.json",
-                        "metrics.json"
-                    })
+                    // Собираем список созданных/обновлённых файлов в memory/
+                    var memoryDir = "memory";
+                    if (Directory.Exists(memoryDir))
                     {
-                        if (File.Exists(path))
+                        foreach (var filePath in Directory.GetFiles(memoryDir, "*.json", SearchOption.AllDirectories))
                         {
-                            var info = new FileInfo(path);
+                            var relPath = Path.GetRelativePath(memoryDir, filePath);
+                            var info = new FileInfo(filePath);
                             var size = info.Length;
-                            files.Add($"   {path,-25} {size,8} байт");
+                            files.Add($"   memory/{relPath,-28} {size,8} байт");
                         }
                     }
 
                     Console.ForegroundColor = ConsoleColor.Green;
-                    Console.WriteLine("✅ Контекст сохранён в файлы:");
+                    Console.WriteLine("✅ Контекст сохранён в папку memory/:");
                     Console.ResetColor();
                     foreach (var f in files)
                     {
@@ -1488,9 +1908,9 @@ while (true)
                                 Console.WriteLine($"   Всего фактов: {facts.Count} (ветка: {branchingFacts.ActiveBranchName})");
                             }
                             // Если активна StickyFacts — показываем факты StickyFacts
-                            else if (agent.ContextManager.StickyFacts is { } stickyFacts)
+                            else if (agent.ContextManager.StickyFacts is { } sf)
                             {
-                                var facts = stickyFacts.Facts;
+                                var facts = sf.Facts;
                                 if (facts.Count == 0)
                                 {
                                     Console.WriteLine("   (пусто)");
@@ -1642,9 +2062,9 @@ while (true)
                             Console.WriteLine("🌿 Ветки диалога:");
                             Console.ResetColor();
 
-                            if (agent.ContextManager.Branching is { } branching)
+                            if (agent.ContextManager.Branching is { } br)
                             {
-                                Console.WriteLine(branching.GetStatus());
+                                Console.WriteLine(br.GetStatus());
                             }
                             else
                             {

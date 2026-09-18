@@ -16,17 +16,21 @@ internal class HistoryDto
 
 /// <summary>
 /// Персистентность контекста агента.
-/// Разделяет сохранение по отдельным файлам для каждого типа данных:
-/// - dialog.json        — история сообщений
-/// - short_term.json    — краткосрочная память (диалог)
-/// - working.json       — рабочая память (текущая задача)
-/// - long_term.json     — долгосрочная память (факты)
-/// - cache.json         — кэш ответов
-/// - metrics.json       — метрики агента
+/// Разделяет сохранение по отдельным папкам для каждого типа данных:
+/// - memory/dialog.json           — история сообщений
+/// - memory/short_term/entries.json  — краткосрочная память (диалог)
+/// - memory/working/current_task.json — рабочая память (текущая задача)
+/// - memory/working/archive.json      — архив задач
+/// - memory/long_term/facts.json      — долгосрочная память (факты)
+/// - memory/cache.json                — кэш ответов
+/// - memory/metrics.json              — метрики агента
 /// </summary>
 public static class ContextPersistence
 {
+    private const string MemoryDir = "memory";
     private const string HistoryFileName = "dialog.json";
+    private const string CacheFileName = "cache.json";
+    private const string MetricsFileName = "metrics.json";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -36,10 +40,21 @@ public static class ContextPersistence
     };
 
     /// <summary>
+    /// Гарантирует, что директория memory существует.
+    /// </summary>
+    private static void EnsureDirectory()
+    {
+        if (!Directory.Exists(MemoryDir))
+            Directory.CreateDirectory(MemoryDir);
+    }
+
+    /// <summary>
     /// Сохраняет весь контекст агента в отдельные файлы.
     /// </summary>
     public static void SaveContext(ChatAgent agent)
     {
+        EnsureDirectory();
+
         // 1. История диалога
         SaveHistory(agent);
 
@@ -114,17 +129,18 @@ public static class ContextPersistence
         };
 
         var json = JsonSerializer.Serialize(dto, JsonOptions);
-        File.WriteAllText(HistoryFileName, json, Encoding.UTF8);
+        File.WriteAllText(Path.Combine(MemoryDir, HistoryFileName), json, Encoding.UTF8);
     }
 
     private static bool LoadHistory(ChatAgent agent)
     {
-        if (!File.Exists(HistoryFileName))
+        var path = Path.Combine(MemoryDir, HistoryFileName);
+        if (!File.Exists(path))
             return false;
 
         try
         {
-            var json = File.ReadAllText(HistoryFileName, Encoding.UTF8);
+            var json = File.ReadAllText(path, Encoding.UTF8);
             var dto = JsonSerializer.Deserialize<HistoryDto>(json, JsonOptions);
 
             if (dto is null || dto.Messages.Count == 0)

@@ -37,22 +37,23 @@ public class ChatClient
         // СЛИВАЕМ все system-сообщения в одно — API GigaChat требует одно system-сообщение
         var mergedSystemMessage = new StringBuilder();
 
-        // Сначала systemMessages (факты ветки, summary и т.д.)
+        // 1. Профиль агента — САМЫЙ ПЕРВЫЙ, чтобы LLM сразу понял контекст
+        // extendedSystemMessage уже содержит: профиль → LongTerm факты → SystemMessage → summary
+        if (!string.IsNullOrEmpty(systemMessage))
+        {
+            mergedSystemMessage.AppendLine(systemMessage);
+        }
+
+        // 2. Затем systemMessages (факты ветки, summary и т.д.) — ПОСЛЕ профиля
         if (systemMessages is { Count: > 0 })
         {
+            if (mergedSystemMessage.Length > 0)
+                mergedSystemMessage.AppendLine("---");
             foreach (var msg in systemMessages)
             {
                 mergedSystemMessage.AppendLine(msg.Content);
                 mergedSystemMessage.AppendLine();
             }
-        }
-
-        // Затем основное системное сообщение
-        if (!string.IsNullOrEmpty(systemMessage))
-        {
-            if (mergedSystemMessage.Length > 0)
-                mergedSystemMessage.AppendLine("---");
-            mergedSystemMessage.AppendLine(systemMessage);
         }
 
         // Добавляем ОДНО слитое system-сообщение (если есть контент)

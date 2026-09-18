@@ -1,6 +1,7 @@
 using GigaChatApp.Infrastructure;
 using GigaChatApp.Models;
 using GigaChatApp.Services;
+using System.Text;
 
 namespace GigaChatApp;
 
@@ -47,6 +48,11 @@ public class ChatAgent
 
     /// <summary>Системное сообщение.</summary>
     public string SystemMessage { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Профиль агента — персонализация поведения.
+    /// </summary>
+    public AgentProfile AgentProfile { get; set; } = null!;
 
     /// <summary>Максимальное количество токенов.</summary>
     public int MaxTokens { get; set; } = 0;
@@ -452,23 +458,28 @@ public class ChatAgent
 
     /// <summary>
     /// Формирует расширенное системное сообщение с релевантными фактами и summary.
-    /// Порядок: LongTerm факты → промпт агента → summary.
-    /// Факты — самые первые, чтобы LLM точно их увидел.
+    /// Порядок: Профиль агента → LongTerm факты → summary.
+    /// Профиль — самый первый, чтобы LLLM сразу понял контекст.
     /// </summary>
     private string BuildExtendedSystemMessage(List<Fact> relevantFacts, ContextResult? contextResult = null)
     {
         var sb = new StringBuilder();
 
-        // 1. Факты из долгосрочной памяти — САМЫЕ ПЕРВЫЕ в системном сообщении
+        // 1. Профиль агента — САМЫЙ ПЕРВЫЙ в системном сообщении
+        if (AgentProfile is not null)
+        {
+            var profilePrompt = AgentProfile.BuildSystemPrompt();
+            sb.AppendLine(profilePrompt);
+            sb.AppendLine();
+        }
+
+        // 2. Факты из долгосрочной памяти — ПОСЛЕ профиля
         if (relevantFacts.Count > 0)
         {
             var topFacts = relevantFacts.Take(10).ToList();
 
-            sb.AppendLine("=== КРИТИЧЕСКИ ВАЖНЫЙ КОНТЕКСТ ИЗ ПАМЯТИ ===");
-            sb.AppendLine("ВНИМАНИЕ: Ниже — ключевая информация из предыдущих обсуждений.");
-            sb.AppendLine("ТЫ ОБЯЗАН использовать эти данные при формировании ответа.");
-            sb.AppendLine("Если указан технологический стек — используй именно его, не предлагай другие.");
-            sb.AppendLine();
+            sb.AppendLine("=== КОНТЕКСТ ИЗ ПАМЯТИ ===");
+            sb.AppendLine("Ниже — ключевая информация из предыдущих обсуждений.");
 
             foreach (var fact in topFacts)
             {
@@ -480,13 +491,13 @@ public class ChatAgent
             sb.AppendLine();
         }
 
-        // 2. Оригинальное системное сообщение (роль агента)
+        // 3. Оригинальное системное сообщение (роль агента)
         if (!string.IsNullOrEmpty(SystemMessage))
         {
             sb.AppendLine(SystemMessage);
         }
 
-        // 3. Summary из ContextManager (сжатая история диалога)
+        // 4. Summary из ContextManager (сжатая история диалога)
         if (contextResult is { IsCompressed: true, SummaryText: not "" })
         {
             sb.AppendLine();
@@ -729,12 +740,12 @@ public class ChatAgent
     public void LoadHistory(IEnumerable<ApiMessage> messages)
     {
         _history.Clear();
-        MemoryManager.ShortTerm.Clear();
         foreach (var msg in messages)
         {
             _history.Add(msg);
-            MemoryManager.ShortTerm.Add(msg.Role, msg.Content);
         }
+        // Загружаем в ContextManager — он формирует контекст для API
+        ContextManager.LoadHistory(messages);
         Logger.Info($"Загружено {messages.Count()} сообщений истории");
     }
 

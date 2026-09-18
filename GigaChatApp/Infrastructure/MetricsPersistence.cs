@@ -78,10 +78,11 @@ internal class MetricsDto
 
 /// <summary>
 /// Персистентность метрик агента.
-/// Сохраняет/загружает из metrics.json.
+/// Сохраняет/загружает из memory/metrics.json.
 /// </summary>
 public static class MetricsPersistence
 {
+    private const string MemoryDir = "memory";
     private const string FileName = "metrics.json";
 
     private static readonly JsonSerializerOptions Options = new()
@@ -91,13 +92,25 @@ public static class MetricsPersistence
         PropertyNameCaseInsensitive = true,
     };
 
-    public static string FilePath => Path.GetFullPath(FileName);
+    public static string FilePath => Path.GetFullPath(Path.Combine(MemoryDir, FileName));
+
+    /// <summary>
+    /// Гарантирует, что директория memory существует.
+    /// </summary>
+    private static void EnsureDirectory()
+    {
+        var dir = Path.GetDirectoryName(FilePath);
+        if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+            Directory.CreateDirectory(dir);
+    }
 
     /// <summary>
     /// Сохраняет метрики агента в JSON-файл.
     /// </summary>
     public static void Save(AgentMetrics metrics)
     {
+        EnsureDirectory();
+
         var dto = new MetricsDto
         {
             TotalRequests = metrics.TotalRequests,

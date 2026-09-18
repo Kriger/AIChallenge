@@ -57,11 +57,12 @@ internal class WorkingMemoryDto
 
 /// <summary>
 /// Персистентность рабочей памяти (текущая задача).
-/// Сохраняет/загружает из working.json.
+/// Сохраняет/загружает из memory/working/current.json.
 /// </summary>
 public static class WorkingMemoryPersistence
 {
-    private const string FileName = "working.json";
+    private const string MemoryDir = "memory/working";
+    private const string FileName = "current.json";
 
     private static readonly JsonSerializerOptions Options = new()
     {
@@ -70,13 +71,25 @@ public static class WorkingMemoryPersistence
         PropertyNameCaseInsensitive = true,
     };
 
-    public static string FilePath => Path.GetFullPath(FileName);
+    public static string FilePath => Path.GetFullPath(Path.Combine(MemoryDir, FileName));
+
+    /// <summary>
+    /// Гарантирует, что директория working существует.
+    /// </summary>
+    private static void EnsureDirectory()
+    {
+        var dir = Path.GetDirectoryName(FilePath);
+        if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+            Directory.CreateDirectory(dir);
+    }
 
     /// <summary>
     /// Сохраняет рабочую память в JSON-файл.
     /// </summary>
     public static void Save(WorkingMemory memory)
     {
+        EnsureDirectory();
+
         var dto = new WorkingMemoryDto
         {
             Entries = memory.All.ToDictionary(
