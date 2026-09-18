@@ -529,6 +529,76 @@ while (true)
                 Console.WriteLine();
                 continue;
 
+            case "/plan":
+                {
+                    if (agent.History.Count < 1)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine("❌ Нет сообщений в истории для планирования");
+                        Console.ResetColor();
+                        Console.WriteLine();
+                        break;
+                    }
+
+                    // Берём последнее сообщение пользователя
+                    var lastUserMsg = agent.History
+                        .Where(m => m.Role.Equals("user", StringComparison.OrdinalIgnoreCase))
+                        .LastOrDefault();
+
+                    if (lastUserMsg is null)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine("❌ Нет сообщений пользователя в истории");
+                        Console.ResetColor();
+                        Console.WriteLine();
+                        break;
+                    }
+
+                    Console.ForegroundColor = ConsoleColor.Yellow;
+                    Console.WriteLine($"📋 Ручной запуск планировщика для: \"{lastUserMsg.Content[..Math.Min(60, lastUserMsg.Content.Length)]}\"");
+                    Console.ResetColor();
+
+                    // Показываем текущее состояние рабочей памяти
+                    Console.WriteLine($"   До: рабочая память содержит {agent.MemoryManager.Working.Count} записей");
+
+                    // Запускаем планировщик напрямую
+                    var facts = agent.MemoryManager.LongTerm.FindRelevant(lastUserMsg.Content);
+                    Console.WriteLine($"   Найдено {facts.Count} фактов для контекста");
+
+                    var plan = await agent.Planner.CreatePlanAsync(lastUserMsg.Content, facts);
+                    Console.WriteLine($"   CreatePlanAsync вернул: {(plan == null ? "null" : $"{plan.Tasks.Count} задач")}");
+
+                    if (plan is null || plan.Tasks.Count == 0)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Yellow;
+                        Console.WriteLine("   LLM не создал план (запрос слишком простой)");
+                        Console.ResetColor();
+
+                        // Даже если план не создан — сохраняем запрос в рабочую память
+                        agent.MemoryManager.Working.Save("request", lastUserMsg.Content, "request");
+                        Console.WriteLine($"   Запрос сохранён в рабочую память. Всего записей: {agent.MemoryManager.Working.Count}");
+                    }
+                    else
+                    {
+                        Console.ForegroundColor = ConsoleColor.Green;
+                        Console.WriteLine($"   ✅ План создан: {plan.Tasks.Count} подзадач");
+                        Console.ResetColor();
+                        foreach (var task in plan.Tasks)
+                        {
+                            Console.WriteLine($"     {task.Id}. {task.Description}");
+                        }
+
+                        // Сохраняем план в рабочую память
+                        agent.MemoryManager.Working.SavePlan(plan);
+                        agent.MemoryManager.Working.Save("request", lastUserMsg.Content, "request");
+                        Console.WriteLine();
+                        Console.WriteLine($"   План сохранён в рабочую память. Всего записей: {agent.MemoryManager.Working.Count}");
+                        Console.WriteLine($"   Текущая задача: {agent.MemoryManager.Working.CurrentTaskId}");
+                    }
+                    Console.WriteLine();
+                    break;
+                }
+
             case "/memory":
                 if (parts.Length < 2)
                 {

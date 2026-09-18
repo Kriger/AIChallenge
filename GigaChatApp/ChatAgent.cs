@@ -144,11 +144,21 @@ public class ChatAgent
         }
 
         // 3. Проверяем, нужен ли Planning
-        if (Config.PlannerEnabled && Planner.NeedsDecomposition(userMessage))
+        if (Config.PlannerEnabled)
         {
-            Logger.Info($"Запрос сложный, запускаю Planning...");
-            var planResult = await ExecuteWithPlanningAsync(userMessage, relevantFacts);
-            return planResult;
+            var needs = Planner.NeedsDecomposition(userMessage);
+            if (!needs)
+            {
+                var tooShort = userMessage.Length < Planner.MinComplexityLength;
+                var noKeyword = !Planner.ComplexityKeywords.Any(kw => userMessage.ToLowerInvariant().Contains(kw));
+                Logger.Debug($"Planning пропущен: длина={userMessage.Length} (нужно ≥{Planner.MinComplexityLength}), ключевое слово: {(noKeyword ? "нет" : "да")}");
+            }
+            if (needs)
+            {
+                Logger.Info($"Запрос сложный, запускаю Planning...");
+                var planResult = await ExecuteWithPlanningAsync(userMessage, relevantFacts);
+                return planResult;
+            }
         }
 
         // 4. Обычный запрос — отправляем в API с контекстом
@@ -212,6 +222,11 @@ public class ChatAgent
 
         Logger.Info($"Создан план с {plan.Tasks.Count} подзадачами");
 
+        // Сохраняем план и подзадачи в рабочую память
+        MemoryManager.Working.SavePlan(plan);
+        MemoryManager.Working.Save("request", userMessage, "request");
+        Logger.Info($"План сохранён в рабочую память: {plan.Tasks.Count} подзадач");
+
         // Показываем план пользователю
         Console.WriteLine();
         Console.ForegroundColor = ConsoleColor.Cyan;
@@ -229,6 +244,18 @@ public class ChatAgent
         Console.ResetColor();
 
         plan = await Planner.ExecutePlanAsync(plan, relevantFacts);
+
+        // Сохраняем результаты подзадач в рабочую память
+        for (int i = 0; i < plan.Tasks.Count; i++)
+        {
+            var task = plan.Tasks[i];
+            MemoryManager.Working.Save($"task.{i}.result", task.Result, "task_result");
+            MemoryManager.Working.Save($"task.{i}.status", task.StatusText, "task_status");
+        }
+        if (plan.FinalAnswer is not null)
+        {
+            MemoryManager.Working.Save("final_answer", plan.FinalAnswer, "plan_result");
+        }
 
         // Показываем статус подзадач
         Console.WriteLine();
@@ -634,16 +661,14 @@ public class ChatAgent
     }
 
     /// <summary>
-    /// Сохраняет извлечённый факт в активную стратегию (Branching/StickyFacts),
-    /// в долгосрочную память и в рабочую память.
+    /// Сохраняет извлечённый факт в активную стратегию (Branching/StickyFacts)
+    /// и в долгосрочную память.
+    /// Рабочая память заполняется отдельно — данными задачи (план, подзадачи, результаты).
     /// </summary>
     private void SaveExtractedFact(string key, string value)
     {
         // Всегда сохраняем в долгосрочную память
         MemoryManager.LongTerm.Save(key, value, "extracted");
-
-        // Сохраняем в рабочую память как данные задачи
-        MemoryManager.Working.Save(key, value, "fact");
 
         var strategy = ContextManager.Config.Strategy;
 
@@ -651,16 +676,16 @@ public class ChatAgent
         {
             case ContextStrategy.Branching when ContextManager.Branching is { } branching:
                 branching.SaveFact(key, value);
-                Logger.Info($"Факт сохранён: ветка ({branching.ActiveBranchName}) + LongTerm + Working: {key}");
+                Logger.Info($"Факт сохранён: ветка ({branching.ActiveBranchName}) + LongTerm: {key}");
                 break;
 
             case ContextStrategy.StickyFacts when ContextManager.StickyFacts is { } stickyFacts:
                 stickyFacts.SaveFact(key, value);
-                Logger.Info($"Факт сохранён: StickyFacts + LongTerm + Working: {key}");
+                Logger.Info($"Факт сохранён: StickyFacts + LongTerm: {key}");
                 break;
 
             default:
-                Logger.Info($"Факт сохранён: LongTerm + Working: {key}");
+                Logger.Info($"Факт сохранён (LongTerm): {key}");
                 break;
         }
     }

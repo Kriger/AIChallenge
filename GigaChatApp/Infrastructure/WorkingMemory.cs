@@ -76,16 +76,18 @@ public class WorkingMemory
                 Key = key,
                 Value = value,
                 Type = type,
-                CreatedAt = DateTime.UtcNow,
                 TaskId = CurrentTaskId,
+                CreatedAt = DateTime.UtcNow,
             };
-            _logger.Info($"[Рабоч. память] Сохранено: {key} = \"{Truncate(value, 50)}\" (тип: {type})");
+            _logger.Info($"[Рабоч. память] Сохранено: {key} = \"{Truncate(value, 50)}\" (тип: {type}, задача: {CurrentTaskId ?? "нет"})");
         }
         else
         {
             _entries[key].Value = value;
+            _entries[key].Type = type;
+            _entries[key].TaskId = CurrentTaskId;
             _entries[key].UpdatedAt = DateTime.UtcNow;
-            _logger.Info($"[Рабоч. память] Обновлено: {key} = \"{Truncate(value, 50)}\"");
+            _logger.Info($"[Рабоч. память] Обновлено: {key} = \"{Truncate(value, 50)}\" (задача: {CurrentTaskId ?? "нет"})");
         }
     }
 
@@ -94,6 +96,14 @@ public class WorkingMemory
     /// </summary>
     public void SavePlan(Plan plan)
     {
+        // Устанавливаем текущую задачу
+        if (CurrentTaskId is null)
+        {
+            CurrentTaskId = $"plan-{DateTime.UtcNow:yyyyMMddHHmmss}";
+            CurrentTaskStatus = "running";
+            TaskStartedAt = DateTime.UtcNow;
+        }
+
         Save("plan", plan.OriginalRequest, "plan");
         Save("plan_status", plan.StatusText, "plan");
 

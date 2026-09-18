@@ -41,7 +41,7 @@ public class Planner
     /// <summary>
     /// Ключевые слова, указывающие на сложность запроса.
     /// </summary>
-    private static readonly string[] ComplexityKeywords = {
+    public static readonly string[] ComplexityKeywords = {
         "анализируй", "проанализируй", "сравни", "сравни", "перечисли", "составь",
         "создай", "напиши", "разработай", "спроектируй", "изучи", "проанализируй",
         "каждый", "все", "какие", "почему", "как", "объясни", "объясни",

@@ -813,6 +813,45 @@ public static class ContextPersistence
                         agent.Logger.Info($"Восстановлено {factsDto.Facts.Count} фактов StickyFacts");
                     }
                 }
+
+                // === Миграция: переносим факты из ветки/StickyFacts в LongTermMemory ===
+                // Старые контексты сохраняли факты только в Branching/StickyFacts,
+                // а не в LongTermMemory. Мигрируем их при загрузке.
+                var migratedCount = 0;
+
+                // Мигрируем факты из восстановленных веток
+                if (agent.ContextManager.Branching is { } br)
+                {
+                    foreach (var branch in br.GetAllBranches())
+                    {
+                        foreach (var kvp in branch.Facts)
+                        {
+                            if (!agent.MemoryManager.LongTerm.All.ContainsKey(kvp.Key))
+                            {
+                                agent.MemoryManager.LongTerm.Save(kvp.Key, kvp.Value, "migrated");
+                                migratedCount++;
+                            }
+                        }
+                    }
+                }
+
+                // Мигрируем факты из StickyFacts
+                if (agent.ContextManager.StickyFacts is { } sf)
+                {
+                    foreach (var kvp in sf.Facts)
+                    {
+                        if (!agent.MemoryManager.LongTerm.All.ContainsKey(kvp.Key))
+                        {
+                            agent.MemoryManager.LongTerm.Save(kvp.Key, kvp.Value, "migrated");
+                            migratedCount++;
+                        }
+                    }
+                }
+
+                if (migratedCount > 0)
+                {
+                    agent.Logger.Info($"Миграция: перенесено {migratedCount} факт(ов) из веток/StickyFacts в LongTermMemory");
+                }
             }
 
             agent.Logger.Info($"Контекст загружен (сохранён: {context.SavedAt:yyyy-MM-dd HH:mm:ss} UTC)");
