@@ -101,6 +101,18 @@ var contextConfig = new ContextManagerConfig
     MaxContextTokens = config.ContextMaxTokens,
 };
 
+// Применяем стратегию из конфига
+if (Enum.TryParse(config.ContextStrategy, ignoreCase: true, out ContextStrategy strategy))
+{
+    contextConfig.Strategy = strategy;
+    Console.WriteLine($"📦 Стратегия контекста: {strategy}");
+}
+else
+{
+    Console.WriteLine($"❌ Неизвестная стратегия: {config.ContextStrategy}, используем SlidingWindow");
+    contextConfig.Strategy = ContextStrategy.SlidingWindow;
+}
+
 var contextManager = new ContextManager(chatClient, authClient, logger, contextConfig);
 var agent = new ChatAgent(chatClient, authClient, cache, logger, memoryManager, null, null, contextManager);
 var adaptive = new AdaptiveBehavior(agent.Metrics, cache, logger);
@@ -582,7 +594,7 @@ while (true)
                     var facts = agent.MemoryManager.LongTerm.FindRelevant(lastUserMsg.Content);
                     Console.WriteLine($"   Найдено {facts.Count} фактов для контекста");
 
-                    var plan = await agent.Planner.CreatePlanAsync(lastUserMsg.Content, facts);
+                    var plan = await agent.Planner!.CreatePlanAsync(lastUserMsg!.Content, facts);
                     Console.WriteLine($"   CreatePlanAsync вернул: {(plan == null ? "null" : $"{plan.Tasks.Count} задач")}");
 
                     if (plan is null || plan.Tasks.Count == 0)
@@ -1392,12 +1404,45 @@ while (true)
                 continue;
 
             case "/save":
-                ContextPersistence.SaveContext(agent);
-                Console.ForegroundColor = ConsoleColor.Green;
-                Console.WriteLine("✅ Контекст сохранён.");
-                Console.ResetColor();
-                Console.WriteLine();
-                continue;
+                {
+                    Console.ForegroundColor = ConsoleColor.Yellow;
+                    Console.WriteLine("💾 Сохранение контекста...");
+                    Console.ResetColor();
+
+                    var files = new List<string>();
+
+                    // История
+                    var historyPath = Path.GetFullPath("dialog.json");
+                    ContextPersistence.SaveContext(agent);
+
+                    // Собираем список созданных/обновлённых файлов
+                    foreach (var path in new[] {
+                        "dialog.json",
+                        "short_term.json",
+                        "working.json",
+                        "long_term.json",
+                        "cache.json",
+                        "metrics.json"
+                    })
+                    {
+                        if (File.Exists(path))
+                        {
+                            var info = new FileInfo(path);
+                            var size = info.Length;
+                            files.Add($"   {path,-25} {size,8} байт");
+                        }
+                    }
+
+                    Console.ForegroundColor = ConsoleColor.Green;
+                    Console.WriteLine("✅ Контекст сохранён в файлы:");
+                    Console.ResetColor();
+                    foreach (var f in files)
+                    {
+                        Console.WriteLine(f);
+                    }
+                    Console.WriteLine();
+                    break;
+                }
 
             case "/facts":
                 if (parts.Length < 2)
