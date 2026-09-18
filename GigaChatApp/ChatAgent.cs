@@ -124,22 +124,17 @@ public class ChatAgent
             };
         }
 
-        // 2. Ищем релевантные факты
+        // 2. Ищем релевантные факты из LongTermMemory
+        // Факты ищутся ВСЕГДА, независимо от стратегии контекста.
+        // При Branching/StickyFacts дополнительно используются факты ветки (через systemMessages).
         List<Fact> relevantFacts = new();
-
-        // При Branching/StickyFacts факты берутся из ветки (через systemMessages)
-        // Memory.FindRelevant не используется чтобы не смешивать факты разных веток
-        if (ContextManager.Config.Strategy != ContextStrategy.Branching &&
-            ContextManager.Config.Strategy != ContextStrategy.StickyFacts)
+        relevantFacts = MemoryManager.LongTerm.FindRelevant(userMessage);
+        if (relevantFacts.Count > 0)
         {
-            relevantFacts = MemoryManager.LongTerm.FindRelevant(userMessage);
-            if (relevantFacts.Count > 0)
+            Logger.Info($"Память: найдено {relevantFacts.Count} релевантных факт(ов)");
+            foreach (var fact in relevantFacts)
             {
-                Logger.Info($"Память: найдено {relevantFacts.Count} релевантных факт(ов)");
-                foreach (var fact in relevantFacts)
-                {
-                    Logger.Debug($"  → {fact.Key}: {Truncate(fact.Value, 80)}");
-                }
+                Logger.Debug($"  → {fact.Key}: {Truncate(fact.Value, 80)}");
             }
         }
 
@@ -324,8 +319,27 @@ public class ChatAgent
 
         // Логирование для отладки — что уходит в API
         Logger.Debug($"[API] Системное сообщение: {extendedSystemMessage[..Math.Min(200, extendedSystemMessage.Length)]}...");
-        Logger.Debug($"[API] Фактов в системном сообщении: {relevantFacts.Count}");
+        Logger.Debug($"[API] Фактов LongTerm: {relevantFacts.Count}");
         Logger.Debug($"[API] Recent messages: {contextResult.RecentMessages.Count}, system messages: {contextResult.SystemMessages.Count}");
+
+        // Детальное логирование фактов
+        if (relevantFacts.Count > 0)
+        {
+            Logger.Debug($"[API] Факты в системном сообщении:");
+            foreach (var fact in relevantFacts.Take(5))
+            {
+                Logger.Debug($"  → [{fact.Key}] {Truncate(fact.Value, 100)}");
+            }
+        }
+
+        if (contextResult.SystemMessages.Count > 0)
+        {
+            Logger.Debug($"[API] SystemMessages от стратегии:");
+            foreach (var sm in contextResult.SystemMessages)
+            {
+                Logger.Debug($"  → [{sm.Role}] {sm.Content[..Math.Min(100, sm.Content.Length)]}...");
+            }
+        }
 
         var lastException = default(Exception);
         var retryCount = 0;
@@ -437,30 +451,23 @@ public class ChatAgent
     }
 
     /// <summary>
-    /// Формирует системное сообщение с релевантными фактами и summary.
-    /// Факты добавляются ПЕРЕД summary — ближе к началу, чтобы LLM их заметил.
+    /// Формирует расширенное системное сообщение с релевантными фактами и summary.
+    /// Порядок: LongTerm факты → промпт агента → summary.
+    /// Факты — самые первые, чтобы LLM точно их увидел.
     /// </summary>
     private string BuildExtendedSystemMessage(List<Fact> relevantFacts, ContextResult? contextResult = null)
     {
         var sb = new StringBuilder();
 
-        // 1. Оригинальное системное сообщение (роль агента)
-        if (!string.IsNullOrEmpty(SystemMessage))
-        {
-            sb.AppendLine(SystemMessage);
-        }
-
-        // 2. Факты из долгосрочной памяти — ДО summary, чтобы LLM их точно увидел
+        // 1. Факты из долгосрочной памяти — САМЫЕ ПЕРВЫЕ в системном сообщении
         if (relevantFacts.Count > 0)
         {
-            // Берём только топ-10 самых релевантных, чтобы не перегружать
             var topFacts = relevantFacts.Take(10).ToList();
 
-            sb.AppendLine();
-            sb.AppendLine("=== ВАЖНЫЙ КОНТЕКСТ ИЗ ПАМЯТИ ===");
-            sb.AppendLine("НИЖЕ — информация из памяти агента о предыдущих обсуждениях.");
-            sb.AppendLine("ОБЯЗАТЕЛЬНО учитывай эти данные при формировании ответа.");
-            sb.AppendLine("Особенно важно: если указан технологический стек — используй именно его.");
+            sb.AppendLine("=== КРИТИЧЕСКИ ВАЖНЫЙ КОНТЕКСТ ИЗ ПАМЯТИ ===");
+            sb.AppendLine("ВНИМАНИЕ: Ниже — ключевая информация из предыдущих обсуждений.");
+            sb.AppendLine("ТЫ ОБЯЗАН использовать эти данные при формировании ответа.");
+            sb.AppendLine("Если указан технологический стек — используй именно его, не предлагай другие.");
             sb.AppendLine();
 
             foreach (var fact in topFacts)
@@ -470,6 +477,13 @@ public class ChatAgent
 
             sb.AppendLine();
             sb.AppendLine("=== КОНЕЦ КОНТЕКСТА ===");
+            sb.AppendLine();
+        }
+
+        // 2. Оригинальное системное сообщение (роль агента)
+        if (!string.IsNullOrEmpty(SystemMessage))
+        {
+            sb.AppendLine(SystemMessage);
         }
 
         // 3. Summary из ContextManager (сжатая история диалога)
@@ -481,9 +495,6 @@ public class ChatAgent
             sb.AppendLine($"[Заменено {contextResult.ReplacedMessages} сообщений, отправлено {contextResult.SystemMessages.Count + contextResult.RecentMessages.Count}]");
             sb.AppendLine("==============================");
         }
-
-        // Факты ветки (Branching/StickyFacts) НЕ добавляем сюда — они уже в systemMessages
-        // и будут переданы как отдельное system-сообщение в API
 
         return sb.ToString();
     }
