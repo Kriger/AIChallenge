@@ -9,6 +9,11 @@ public class Plan
     /// <summary>Исходный запрос пользователя.</summary>
     public string OriginalRequest { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Причина отказа в планировании (если запрос нарушает инварианты).
+    /// </summary>
+    public string? RefusalReason { get; set; }
+
     /// <summary>Список подзадач.</summary>
     public List<TaskItem> Tasks { get; } = new();
 

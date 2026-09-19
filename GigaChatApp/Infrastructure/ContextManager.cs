@@ -1,4 +1,5 @@
 using GigaChatApp.Models;
+using Microsoft.Extensions.Configuration;
 using GigaChatApp.Services;
 
 namespace GigaChatApp.Infrastructure;
@@ -51,8 +52,9 @@ public class ContextManager
         AuthClient authClient,
         AgentLogger logger,
         ContextManagerConfig? config = null,
-        int? stickyFactsWindowSize = null,
-        int? stickyFactsMaxFacts = null)
+        SlidingWindowConfig? slidingWindowConfig = null,
+        StickyFactsConfig? stickyFactsConfig = null,
+        BranchingConfig? branchingConfig = null)
     {
         _chatClient = chatClient;
         _authClient = authClient;
@@ -60,11 +62,11 @@ public class ContextManager
         _config = config ?? new ContextManagerConfig();
 
         // Инициализируем все стратегии с настройками из конфига
-        var slidingWindowSize = _config.RecentMessageCount;
+        var slidingWindowSize = slidingWindowConfig?.WindowSize ?? _config.RecentMessageCount;
         _slidingWindow = new SlidingWindowStrategy(slidingWindowSize);
 
-        var stickyWindowSize = stickyFactsWindowSize ?? _config.RecentMessageCount;
-        var stickyMaxFacts = stickyFactsMaxFacts ?? 50;
+        var stickyWindowSize = stickyFactsConfig?.WindowSize ?? _config.RecentMessageCount;
+        var stickyMaxFacts = stickyFactsConfig?.MaxFacts ?? 50;
         _stickyFacts = new StickyFactsStrategy(chatClient, authClient, logger, stickyWindowSize, stickyMaxFacts);
 
         _branching = new BranchingStrategy();

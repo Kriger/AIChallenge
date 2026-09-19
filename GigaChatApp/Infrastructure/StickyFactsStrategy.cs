@@ -54,6 +54,16 @@ public class StickyFactsStrategy : IContextStrategy
 
     public string Description => $"Блок фактов ({_facts.Count}) + последние {_windowSize} сообщений. Факты обновляются LLM после каждого сообщения.";
 
+    /// <summary>
+    /// Размер окна — количество последних сообщений.
+    /// </summary>
+    public int WindowSize => _windowSize;
+
+    /// <summary>
+    /// Максимальное количество фактов.
+    /// </summary>
+    public int MaxFacts => _maxFacts;
+
     public StickyFactsStrategy(
         ChatClient chatClient,
         AuthClient authClient,

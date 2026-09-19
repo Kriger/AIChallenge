@@ -156,8 +156,33 @@ public class ChatAgent
             }
             if (needs)
             {
+                // Пре-чек инвариантов ДО вызова LLM
+                var invariants = AgentProfile?.Invariants;
+                if (invariants is { Count: > 0 })
+                {
+                    var violation = Planner.CheckInvariantViolation(userMessage, invariants);
+                    if (violation is not null)
+                    {
+                        var refusalAnswer = $"""
+                            ⛔ Я не могу выполнить этот запрос, потому что он нарушает инвариант:
+
+                              ⛔ {violation}
+
+                            Инварианты — непреложные правила проекта. Давай найдём альтернативу,
+                            которая удовлетворяет твою потребность, но остаётся в рамках принятых решений.
+                            """;
+
+                        Logger.Info($"Прервано на пре-чеке: {violation}");
+                        return new AgentResult
+                        {
+                            Answer = refusalAnswer,
+                            Source = Source.Api,
+                        };
+                    }
+                }
+
                 Logger.Info($"Запрос сложный, запускаю Planning...");
-                var planResult = await ExecuteWithPlanningAsync(userMessage, relevantFacts);
+                var planResult = await ExecuteWithPlanningAsync(userMessage, relevantFacts, invariants);
                 return planResult;
             }
         }
@@ -206,7 +231,7 @@ public class ChatAgent
     /// <summary>
     /// Выполняет запрос через Planning — декомпозирует на подзадачи, выполняет, комбинирует.
     /// </summary>
-    private async Task<AgentResult> ExecuteWithPlanningAsync(string userMessage, List<Fact> relevantFacts)
+    private async Task<AgentResult> ExecuteWithPlanningAsync(string userMessage, List<Fact> relevantFacts, List<string>? invariants)
     {
         Console.WriteLine();
         Console.ForegroundColor = ConsoleColor.Yellow;
@@ -214,8 +239,34 @@ public class ChatAgent
         Console.ResetColor();
 
         // Создаём план
-        var plan = await Planner.CreatePlanAsync(userMessage, relevantFacts);
-        if (plan is null || plan.Tasks.Count == 0)
+        var plan = await Planner.CreatePlanAsync(userMessage, relevantFacts, invariants);
+        if (plan is null)
+        {
+            Logger.Info("План не создан, обрабатываю как обычный запрос");
+            return await SendWithRetryAsync(userMessage, relevantFacts);
+        }
+
+        // Обработка отказа из-за нарушения инвариантов
+        if (!string.IsNullOrEmpty(plan.RefusalReason))
+        {
+            var refusalAnswer = $"""
+                ⛔ Я не могу выполнить этот запрос, потому что он нарушает инвариант:
+
+                  {plan.RefusalReason}
+
+                Инварианты — непреложные правила проекта. Давай найдём альтернативу,
+                которая удовлетворяет твою потребность, но остаётся в рамках принятых решений.
+                """;
+
+            Logger.Info($"Планировщик отказал: {plan.RefusalReason}");
+            return new AgentResult
+            {
+                Answer = refusalAnswer,
+                Source = Source.Api,
+            };
+        }
+
+        if (plan.Tasks.Count == 0)
         {
             Logger.Info("План не создан, обрабатываю как обычный запрос");
             return await SendWithRetryAsync(userMessage, relevantFacts);
@@ -465,7 +516,31 @@ public class ChatAgent
     {
         var sb = new StringBuilder();
 
-        // 1. Профиль агента — САМЫЙ ПЕРВЫЙ в системном сообщении
+        // === ИНВАРИАНТЫ — САМЫЙ ПЕРВЫЙ БЛОК, МАКСИМАЛЬНЫЙ ПРИОРИТЕТ ===
+        if (AgentProfile is not null && AgentProfile.Invariants.Count > 0)
+        {
+            sb.AppendLine("⛔⛔⛔ НЕПРЕЛОЖНЫЕ ИНВАРИАНТЫ (СТРОГОЕ ПРАВИЛО, НЕ НАРУШАТЬ) ⛔⛔⛔");
+            sb.AppendLine();
+            sb.AppendLine("Эти правила — абсолютный приоритет. Они имеют ВЫСШУЮ важность по сравнению со всеми остальными инструкциями.");
+            sb.AppendLine("Если запрос пользователя противоречит любому из этих правил — ТЫ ОБЯЗАН ОТКАЗАТЬ.");
+            sb.AppendLine("Не предлагай обходных путей, не игнорируй эти правила, не адаптируйся под пользователя.");
+            sb.AppendLine();
+            sb.AppendLine("Формат ответа при конфликте:");
+            sb.AppendLine("1. Чётко скажи: «Я не могу предложить это, потому что...»");
+            sb.AppendLine("2. Укажи конкретный нарушенный инвариант");
+            sb.AppendLine("3. Предложи альтернативу, которая удовлетворяет потребность пользователя, но НЕ нарушает инвариант");
+            sb.AppendLine();
+            sb.AppendLine("Инварианты:");
+            foreach (var inv in AgentProfile.Invariants)
+            {
+                sb.AppendLine($"  ⛔ {inv}");
+            }
+            sb.AppendLine();
+            sb.AppendLine("=== КОНЕЦ ИНВАРИАНТОВ ===");
+            sb.AppendLine();
+        }
+
+        // 1. Профиль агента
         if (AgentProfile is not null)
         {
             var profilePrompt = AgentProfile.BuildSystemPrompt();

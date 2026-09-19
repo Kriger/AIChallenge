@@ -78,9 +78,54 @@ public class Planner
     }
 
     /// <summary>
+    /// Проверяет, нарушает ли запрос инварианты.
+    /// Возвращает причину отказа или null, если нарушений нет.
+    /// </summary>
+    public string? CheckInvariantViolation(string request, List<string> invariants)
+    {
+        var lower = request.ToLowerInvariant();
+
+        // Запрещённые технологии и паттерны, которые ищем в запросе
+        var forbiddenTechs = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "webforms", "web forms", "wcf", "monoлит", "monolith",
+            "asp.net framework", "ef6", "entity framework 6",
+            "winforms", "silverlight", "php", "java", "python",
+            "ruby", "django", "flask", "spring", "laravel",
+            "xml-based", "xml", "xaml"
+        };
+
+        foreach (var invariant in invariants)
+        {
+            var invLower = invariant.ToLowerInvariant();
+
+            // Инвариант должен содержать запрет
+            var isForbidden = invLower.Contains("не") &&
+                (invLower.Contains("только") ||
+                 invLower.Contains("запрещ") ||
+                 invLower.Contains("не используй") ||
+                 invLower.Contains("не предлагаем") ||
+                 invLower.Contains("устаревш") ||
+                 invLower.Contains("не предлага"));
+
+            if (!isForbidden)
+                continue;
+
+            // Извлекаем запрещённые технологии из инварианта
+            foreach (var tech in forbiddenTechs)
+            {
+                if (invLower.Contains(tech) && lower.Contains(tech))
+                    return invariant;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// Создаёт план выполнения на основе запроса.
     /// </summary>
-    public async Task<Plan?> CreatePlanAsync(string request, List<Fact>? relevantFacts = null)
+    public async Task<Plan?> CreatePlanAsync(string request, List<Fact>? relevantFacts = null, List<string>? invariants = null)
     {
         try
         {
@@ -90,12 +135,22 @@ public class Planner
                 ? "\n=== КОНТЕКСТ ИЗ ПАМЯТИ ===\n" + string.Join("\n", relevantFacts.Select(f => $"- {f.Key}: {f.Value}"))
                 : "";
 
+            var invariantsContext = invariants is { Count: > 0 }
+                ? "\n⛔ ИНВАРИАНТЫ (СТРОГИЕ ОГРАНИЧЕНИЯ):\n" + string.Join("\n", invariants.Select(i => $"  ⛔ {i}"))
+                : "";
+
             var prompt = $"""
                 Ты — планировщик задач. Твоя цель — разбить сложный запрос пользователя на подзадачи.
 
                 Запрос пользователя:
                 "{request}"
                 {factsContext}
+                {invariantsContext}
+
+                ВАЖНО: Если запрос пользователя противоречит любому из инвариантов — НЕ создавай план.
+                Напиши только: NO_PLAN
+                И объясни причину отказа в формате:
+                REFUSED: <причина отказа, ссылаясь на конкретный инвариант>
 
                 Требования:
                 1. Разбей запрос на 2-5 подзадач
@@ -156,6 +211,15 @@ public class Planner
                 var planText = parsed?.Choices?[0].Message?.Content ?? "";
                 if (string.IsNullOrEmpty(planText))
                     return null;
+
+                // Проверяем, отказал ли планировщик из-за инвариантов
+                if (planText.Contains("REFUSED:", StringComparison.OrdinalIgnoreCase))
+                {
+                    var refusedIdx = planText.IndexOf("REFUSED:", StringComparison.OrdinalIgnoreCase);
+                    var reason = planText[(refusedIdx + "REFUSED:".Length)..].Trim();
+                    var plan = new Plan { OriginalRequest = request, RefusalReason = reason };
+                    return plan;
+                }
 
                 // Парсим план
                 return ParsePlan(planText, request);

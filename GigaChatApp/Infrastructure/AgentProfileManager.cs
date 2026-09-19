@@ -51,6 +51,9 @@ internal class AgentProfileDto
     [JsonPropertyName("instructions")]
     public string Instructions { get; set; } = string.Empty;
 
+    [JsonPropertyName("invariants")]
+    public List<string> Invariants { get; set; } = new();
+
     [JsonPropertyName("createdAt")]
     public DateTime CreatedAt { get; set; }
 
@@ -173,6 +176,7 @@ public static class AgentProfileManager
             ResponseConstraints = new(),
             ResponseRequirements = new(),
             Instructions = string.Empty,
+            Invariants = new(),
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
         };
@@ -199,6 +203,7 @@ public static class AgentProfileManager
             ResponseConstraints = profile.ResponseConstraints,
             ResponseRequirements = profile.ResponseRequirements,
             Instructions = profile.Instructions,
+            Invariants = profile.Invariants,
             CreatedAt = profile.CreatedAt,
             UpdatedAt = profile.UpdatedAt,
         };
@@ -225,6 +230,7 @@ public static class AgentProfileManager
             ResponseConstraints = dto.ResponseConstraints,
             ResponseRequirements = dto.ResponseRequirements,
             Instructions = dto.Instructions,
+            Invariants = dto.Invariants,
             CreatedAt = dto.CreatedAt,
             UpdatedAt = dto.UpdatedAt,
         };

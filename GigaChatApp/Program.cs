@@ -2,6 +2,7 @@ using GigaChatApp.Models;
 using GigaChatApp.Services;
 using GigaChatApp.Infrastructure;
 using GigaChatApp;
+using Microsoft.Extensions.Configuration;
 
 Console.OutputEncoding = Encoding.UTF8;
 
@@ -55,6 +56,7 @@ Console.WriteLine("   Контекст: /context (статус), /context strate
 Console.WriteLine("   Факты: /facts list, /facts save <ключ> <значение>, /facts delete <ключ>");
 Console.WriteLine("   Ветки: /branch list, /branch create <имя>, /branch switch <id>, /branch checkpoint <имя>, /branch create-from <cp-id> <имя>, /branch delete <id>");
 Console.WriteLine("   Профиль: /agent-profile (статус), /agent-profile name/role/style/format/language/depth/domain, /agent-profile tech add/remove/list/clear, /agent-profile constraint/req/instructions/reset");
+Console.WriteLine("   Инварианты: /invariants (статус), /invariants add <текст>, /invariants remove <номер>, /invariants clear");
 Console.WriteLine("   Очистка: /clear | Сохранить: /save | Выход: quit / exit / q");
 Console.WriteLine("   По умолчанию ограничений нет — задайте через команды выше.");
 Console.WriteLine();
@@ -115,21 +117,14 @@ else
     contextConfig.Strategy = ContextStrategy.SlidingWindow;
 }
 
-// Настройки стратегии StickyFacts
-int stickyFactsWindowSize = config.Context.StickyFacts.WindowSize;
-int stickyFactsMaxFacts = config.Context.StickyFacts.MaxFacts;
-
-// Настройки Branching
-int maxBranches = config.Context.Branching.MaxBranches;
-int maxCheckpoints = config.Context.Branching.MaxCheckpoints;
-
 var contextManager = new ContextManager(
     chatClient,
     authClient,
     logger,
     contextConfig,
-    stickyFactsWindowSize,
-    stickyFactsMaxFacts
+    config.Context.SlidingWindow,
+    config.Context.StickyFacts,
+    config.Context.Branching
 );
 var agent = new ChatAgent(chatClient, authClient, cache, logger, memoryManager, null, null, contextManager);
 var adaptive = new AdaptiveBehavior(agent.Metrics, cache, logger);
@@ -152,35 +147,32 @@ agent.SystemMessage = string.Empty;
 
 agent.Metrics.ContextCompressionEnabled = contextConfig.Enabled;
 
-// Загружаем стратегию из config
+// Применяем стратегию из config
 if (Enum.TryParse(config.Context.Strategy, ignoreCase: true, out ContextStrategy loadedStrategy))
 {
     agent.ContextManager.SetStrategy(loadedStrategy);
     agent.ContextManager.Config.Strategy = loadedStrategy;
     Console.WriteLine($"✅ Стратегия контекста: {loadedStrategy}");
+
+    // Выводим настройки активной стратегии
+    switch (loadedStrategy)
+    {
+        case ContextStrategy.StickyFacts when agent.ContextManager.StickyFacts is { } sf:
+            Console.WriteLine($"   StickyFacts: window={sf.WindowSize}, maxFacts={sf.MaxFacts}");
+            break;
+
+        case ContextStrategy.Branching:
+            Console.WriteLine($"   Branching: maxBranches={config.Context.Branching.MaxBranches}, maxCheckpoints={config.Context.Branching.MaxCheckpoints}");
+            break;
+
+        case ContextStrategy.SlidingWindow when agent.ContextManager.SlidingWindow is { } sw:
+            Console.WriteLine($"   SlidingWindow: window={sw.WindowSize}");
+            break;
+    }
 }
 else
 {
     Console.WriteLine($"⚠️  Неизвестная стратегия в config: '{config.Context.Strategy}', используем SlidingWindow");
-    agent.ContextManager.SetStrategy(ContextStrategy.SlidingWindow);
-    agent.ContextManager.Config.Strategy = ContextStrategy.SlidingWindow;
-}
-
-// Применяем настройки стратегии StickyFacts
-if (agent.ContextManager.StickyFacts is { } stickyFacts)
-{
-    // Обновляем window size через рефлексию или перезагрузку
-    Console.WriteLine($"   StickyFacts: window={stickyFactsWindowSize}, maxFacts={stickyFactsMaxFacts}");
-}
-
-// Применяем настройки Branching
-if (agent.ContextManager.Branching is { } branching)
-{
-    Console.WriteLine($"   Branching: maxBranches={maxBranches}, maxCheckpoints={maxCheckpoints}");
-}
-else
-{
-    Console.WriteLine($"⚠️  Неизвестная стратегия в config: '{config.ContextStrategy}', используем SlidingWindow");
     agent.ContextManager.SetStrategy(ContextStrategy.SlidingWindow);
     agent.ContextManager.Config.Strategy = ContextStrategy.SlidingWindow;
 }
@@ -1823,6 +1815,105 @@ while (true)
                     default:
                         Console.ForegroundColor = ConsoleColor.Red;
                         Console.WriteLine($"❌ Неизвестная команда профиля: {profileCommand}. Введи /profile для подсказки.");
+                        Console.ResetColor();
+                        Console.WriteLine();
+                        break;
+                }
+                continue;
+
+            // === Команды инвариантов ===
+            case "/invariants":
+                if (parts.Length < 2)
+                {
+                    // Показываем статус инвариантов
+                    Console.ForegroundColor = ConsoleColor.Yellow;
+                    Console.WriteLine("⛔ Инварианты (непреложные правила):");
+                    Console.ResetColor();
+                    var inv = agent.AgentProfile.Invariants;
+                    if (inv.Count == 0)
+                    {
+                        Console.WriteLine("   (не заданы)");
+                    }
+                    else
+                    {
+                        for (int i = 0; i < inv.Count; i++)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.Write($"   [{i + 1}] ");
+                            Console.ResetColor();
+                            Console.WriteLine(inv[i]);
+                        }
+                    }
+                    Console.WriteLine();
+                    Console.WriteLine("   Команды:");
+                    Console.WriteLine("   /invariants add <текст> — добавить инвариант");
+                    Console.WriteLine("   /invariants remove <номер> — удалить по номеру");
+                    Console.WriteLine("   /invariants clear — удалить все инварианты");
+                    Console.WriteLine();
+                    continue;
+                }
+
+                var invCommand = parts[1].ToLowerInvariant();
+                switch (invCommand)
+                {
+                    case "add":
+                        if (parts.Length < 3)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine("❌ Формат: /invariants add <текст инварианта>");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                            break;
+                        }
+                        var invariantText = string.Join(" ", parts.Skip(2));
+                        agent.AgentProfile.Invariants.Add(invariantText);
+                        AgentProfileManager.Save(agent.AgentProfile);
+                        Console.ForegroundColor = ConsoleColor.Green;
+                        Console.WriteLine($"✅ Инвариант добавлен: {invariantText}");
+                        Console.WriteLine("   ⚠️  Новый инвариант вступит в силу со следующего запроса.");
+                        Console.ResetColor();
+                        Console.WriteLine();
+                        break;
+
+                    case "remove":
+                        if (parts.Length < 3 || !int.TryParse(parts[2], out var invIndex))
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine("❌ Формат: /invariants remove <номер>. Введи /invariants для списка.");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                            break;
+                        }
+                        var invList = agent.AgentProfile.Invariants;
+                        if (invIndex < 1 || invIndex > invList.Count)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine($"❌ Номер вне диапазона (1–{invList.Count}). Введи /invariants для списка.");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                            break;
+                        }
+                        var removed = invList[invIndex - 1];
+                        invList.RemoveAt(invIndex - 1);
+                        AgentProfileManager.Save(agent.AgentProfile);
+                        Console.ForegroundColor = ConsoleColor.Green;
+                        Console.WriteLine($"✅ Инвариант удалён: {removed}");
+                        Console.ResetColor();
+                        Console.WriteLine();
+                        break;
+
+                    case "clear":
+                        agent.AgentProfile.Invariants.Clear();
+                        AgentProfileManager.Save(agent.AgentProfile);
+                        Console.ForegroundColor = ConsoleColor.Green;
+                        Console.WriteLine("✅ Все инварианты удалены");
+                        Console.ResetColor();
+                        Console.WriteLine();
+                        break;
+
+                    default:
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine($"❌ Неизвестная команда: {invCommand}. Доступны: add, remove, clear");
                         Console.ResetColor();
                         Console.WriteLine();
                         break;

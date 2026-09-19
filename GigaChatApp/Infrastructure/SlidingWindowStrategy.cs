@@ -18,6 +18,11 @@ public class SlidingWindowStrategy : IContextStrategy
     public string Description => $"Хранит только последние {_windowSize} сообщений, остальное отбрасывается.";
 
     /// <summary>
+    /// Размер окна — количество последних сообщений.
+    /// </summary>
+    public int WindowSize => _windowSize;
+
+    /// <summary>
     /// Общее количество добавленных сообщений (включая отброшенные).
     /// </summary>
     public int TotalAdded { get; private set; }

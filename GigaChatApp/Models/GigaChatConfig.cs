@@ -77,12 +77,6 @@ public class GigaChatConfig
     public int ContextMaxTokens { get; set; } = 0;
 
     /// <summary>
-    /// Стратегия управления контекстом.
-    /// SlidingWindow, StickyFacts, Branching.
-    /// </summary>
-    public string ContextStrategy { get; set; } = "SlidingWindow";
-
-    /// <summary>
     /// Включено ли планирование (декомпозиция сложных запросов).
     /// false = все запросы обрабатываются напрямую, без разбивки на подзадачи.
     /// </summary>
