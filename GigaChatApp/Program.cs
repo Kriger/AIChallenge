@@ -57,7 +57,7 @@ Console.WriteLine("   Факты: /facts list, /facts save <ключ> <знач�
 Console.WriteLine("   Ветки: /branch list, /branch create <имя>, /branch switch <id>, /branch checkpoint <имя>, /branch create-from <cp-id> <имя>, /branch delete <id>");
 Console.WriteLine("   Профиль: /agent-profile (статус), /agent-profile name/role/style/format/language/depth/domain, /agent-profile tech add/remove/list/clear, /agent-profile constraint/req/instructions/reset");
 Console.WriteLine("   Инварианты: /invariants (статус), /invariants add <текст>, /invariants remove <номер>, /invariants clear");
-Console.WriteLine("   Очистка: /clear | Сохранить: /save | Выход: quit / exit / q");
+Console.WriteLine("   Очистка: /clear | FSM: /fsm | Сохранить: /save | Выход: quit / exit / q");
 Console.WriteLine("   По умолчанию ограничений нет — задайте через команды выше.");
 Console.WriteLine();
 
@@ -176,6 +176,16 @@ else
     agent.ContextManager.SetStrategy(ContextStrategy.SlidingWindow);
     agent.ContextManager.Config.Strategy = ContextStrategy.SlidingWindow;
 }
+
+// Инициализация TaskStateMachine с подключением к GigaChat API
+var taskStateMachine = new TaskStateMachine(chatClient, authClient, config, agent.AgentProfile);
+Console.WriteLine("📋 TaskStateMachine инициализирован (с подключением к GigaChat API)");
+Console.WriteLine("   Автозапуск: введите 'спроектируй', 'составь', 'разработай' и т.п.");
+Console.WriteLine("   Вопросы задаются по одному. Введите /skip чтобы пропустить вопросы.");
+Console.WriteLine("   Команды: /fsm status, /fsm questions, /fsm answer, /fsm next,");
+Console.WriteLine("   /fsm pause, /fsm resume, /fsm transition, /fsm plan, /fsm execute,");
+Console.WriteLine("   /fsm validate, /fsm save, /fsm load, /fsm history, /fsm dialog, /fsm help");
+Console.WriteLine();
 
 // Загружаем контекст из предыдущей сессии
 ContextPersistence.LoadContext(agent);
@@ -1920,6 +1930,609 @@ while (true)
                 }
                 continue;
 
+            case "/fsm":
+                if (parts.Length < 2)
+                {
+                    Console.ForegroundColor = ConsoleColor.Yellow;
+                    Console.WriteLine("📋 TaskStateMachine:");
+                    Console.ResetColor();
+                    Console.WriteLine($"   Этап: {taskStateMachine.Stage}");
+                    Console.WriteLine($"   Шаг: {taskStateMachine.Step.Number}/{taskStateMachine.Step.Total} — {taskStateMachine.Step.Description}");
+                    Console.WriteLine($"   Действие: {taskStateMachine.NextAction}");
+                    Console.WriteLine($"   Пауза: {(taskStateMachine.Paused ? "да" : "нет")}");
+                    Console.WriteLine($"   Завершено: {(taskStateMachine.IsCompleted() ? "да" : "нет")}");
+                    
+                    // Показываем статус сбора требований если на этапе Requirements
+                    var reqStatus = taskStateMachine.GetRequirementsStatus();
+                    if (reqStatus is not null)
+                    {
+                        Console.WriteLine();
+                        Console.ForegroundColor = ConsoleColor.Cyan;
+                        Console.WriteLine("   📝 Сбор требований:");
+                        Console.ResetColor();
+                        Console.WriteLine($"      Вопросов: {reqStatus.TotalQuestions}, Задано: {reqStatus.AnsweredQuestions}");
+                        if (!reqStatus.IsComplete)
+                        {
+                            var nextQ = taskStateMachine.AskNextQuestion();
+                            if (nextQ is not null)
+                            {
+                                Console.WriteLine($"      Следующий вопрос: {nextQ}");
+                            }
+                        }
+                        else
+                        {
+                            Console.WriteLine("      ✅ Все вопросы заданы");
+                        }
+                    }
+                    Console.WriteLine();
+                    Console.WriteLine("   Команды:");
+                    Console.WriteLine("   /fsm status — текущий статус");
+                    Console.WriteLine("   /fsm questions <вопрос1;вопрос2;вопрос3> — задать вопросы");
+                    Console.WriteLine("   /fsm answer <ответ> — ответить на текущий вопрос");
+                    Console.WriteLine("   /fsm next — перейти к следующему вопросу");
+                    Console.WriteLine("   /fsm plan — выполнить планирование (LLM)");
+                    Console.WriteLine("   /fsm execute <описание шага> — выполнить шаг плана (LLM)");
+                    Console.WriteLine("   /fsm validate <результат> — валидировать результат (LLM)");
+                    Console.WriteLine("   /fsm transition <этап> — перейти в этап (Planning/Execution/Validation/Done)");
+                    Console.WriteLine("   /fsm pause — поставить на паузу (состояние сохраняется в fsm_state.json)");
+                    Console.WriteLine("   /fsm resume — возобновить (загружает состояние из fsm_state.json)");
+                    Console.WriteLine("   /fsm save <файл.json> — сохранить состояние");
+                    Console.WriteLine("   /fsm load <файл.json> — загрузить состояние");
+                    Console.WriteLine("   /fsm history — история переходов");
+                    Console.WriteLine("   /fsm dialog — история диалога текущего этапа");
+                    Console.WriteLine();
+                    continue;
+                }
+
+                var fsmCmd = parts[1].ToLowerInvariant();
+
+                switch (fsmCmd)
+                {
+                    case "status":
+                    case "":
+                        Console.ForegroundColor = ConsoleColor.Yellow;
+                        Console.WriteLine("📋 TaskStateMachine:");
+                        Console.ResetColor();
+                        Console.WriteLine($"   Этап: {taskStateMachine.Stage}");
+                        Console.WriteLine($"   Шаг: {taskStateMachine.Step.Number}/{taskStateMachine.Step.Total} — {taskStateMachine.Step.Description}");
+                        Console.WriteLine($"   Действие: {taskStateMachine.NextAction}");
+                        Console.WriteLine($"   Пауза: {(taskStateMachine.Paused ? "да" : "нет")}");
+                        Console.WriteLine($"   Завершено: {(taskStateMachine.IsCompleted() ? "да" : "нет")}");
+                        
+                        // Показываем статус сбора требований если на этапе Requirements
+                        var reqStatus = taskStateMachine.GetRequirementsStatus();
+                        if (reqStatus is not null)
+                        {
+                            Console.WriteLine();
+                            Console.ForegroundColor = ConsoleColor.Cyan;
+                            Console.WriteLine("   📝 Сбор требований:");
+                            Console.ResetColor();
+                            Console.WriteLine($"      Вопросов: {reqStatus.TotalQuestions}, Задано: {reqStatus.AnsweredQuestions}");
+                            if (!reqStatus.IsComplete)
+                            {
+                                var nextQ = taskStateMachine.AskNextQuestion();
+                                if (nextQ is not null)
+                                {
+                                    Console.WriteLine($"      Следующий вопрос: {nextQ}");
+                                }
+                            }
+                            else
+                            {
+                                Console.WriteLine("      ✅ Все вопросы заданы");
+                            }
+                        }
+                        Console.WriteLine();
+                        break;
+
+                    case "questions":
+                        if (parts.Length < 3)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine("❌ Формат: /fsm questions <вопрос1;вопрос2;вопрос3>");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                            break;
+                        }
+                        if (taskStateMachine.Stage != TaskStage.Requirements)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine($"❌ SetQuestions можно вызывать только на этапе Requirements (сейчас: {taskStateMachine.Stage})");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                            break;
+                        }
+                        var questionsText = string.Join(" ", parts.Skip(2));
+                        var questions = questionsText.Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+                        if (questions.Length == 0)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine("❌ Список вопросов не может быть пустым");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                            break;
+                        }
+                        try
+                        {
+                            taskStateMachine.SetQuestions(new List<string>(questions));
+                            Console.ForegroundColor = ConsoleColor.Green;
+                            Console.WriteLine($"✅ Задано {questions.Length} вопрос(ов):");
+                            Console.ResetColor();
+                            for (int i = 0; i < questions.Length; i++)
+                            {
+                                Console.WriteLine($"   {i + 1}. {questions[i]}");
+                            }
+                            Console.WriteLine();
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine($"❌ Ошибка: {ex.Message}");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                        }
+                        break;
+
+                    case "answer":
+                        if (parts.Length < 3)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine("❌ Формат: /fsm answer <ответ>");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                            break;
+                        }
+                        var answer = string.Join(" ", parts.Skip(2));
+                        try
+                        {
+                            taskStateMachine.ReceiveAnswer(answer);
+                            Console.ForegroundColor = ConsoleColor.Green;
+                            Console.WriteLine($"✅ Ответ записан: \"{answer}\"");
+                            Console.ResetColor();
+
+                            var nextQuestion = taskStateMachine.AskNextQuestion();
+                            if (nextQuestion is null)
+                            {
+                                Console.WriteLine("   Все вопросы заданы! Используйте /fsm transition Planning для перехода к планированию.");
+                            }
+                            else
+                            {
+                                Console.ForegroundColor = ConsoleColor.Cyan;
+                                Console.WriteLine($"   Следующий вопрос:");
+                                Console.ResetColor();
+                                Console.WriteLine($"   {nextQuestion}");
+                            }
+                            Console.WriteLine();
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine($"❌ Ошибка: {ex.Message}");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                        }
+                        break;
+
+                    case "next":
+                        try
+                        {
+                            var nextQ = taskStateMachine.AskNextQuestion();
+                            if (nextQ is null)
+                            {
+                                Console.ForegroundColor = ConsoleColor.Yellow;
+                                Console.WriteLine("   Все вопросы заданы.");
+                                Console.ResetColor();
+                            }
+                            else
+                            {
+                                Console.ForegroundColor = ConsoleColor.Cyan;
+                                Console.WriteLine($"   Вопрос: {nextQ}");
+                                Console.ResetColor();
+                            }
+                            Console.WriteLine();
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine($"❌ Ошибка: {ex.Message}");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                        }
+                        break;
+
+                    case "plan":
+                        try
+                        {
+                            Console.ForegroundColor = ConsoleColor.Yellow;
+                            Console.WriteLine("📋 Выполняю планирование через LLM...");
+                            Console.ResetColor();
+                            var planResult = await taskStateMachine.ExecutePlanningAsync();
+                            Console.ForegroundColor = ConsoleColor.Green;
+                            Console.WriteLine("✅ Планирование завершено:");
+                            Console.ResetColor();
+                            Console.WriteLine($"   {planResult}");
+                            Console.WriteLine();
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine($"❌ Ошибка планирования: {ex.Message}");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                        }
+                        break;
+
+                    case "execute":
+                        if (parts.Length < 3)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine("❌ Формат: /fsm execute <описание шага>");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                            break;
+                        }
+                        var stepDesc = string.Join(" ", parts.Skip(2));
+                        try
+                        {
+                            Console.ForegroundColor = ConsoleColor.Yellow;
+                            Console.WriteLine($"⚙ Выполняю шаг: {stepDesc}");
+                            Console.ResetColor();
+                            var execResult = await taskStateMachine.ExecuteStepAsync(stepDesc);
+                            Console.ForegroundColor = ConsoleColor.Green;
+                            Console.WriteLine("✅ Шаг выполнен:");
+                            Console.ResetColor();
+                            Console.WriteLine($"   {execResult}");
+                            Console.WriteLine();
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine($"❌ Ошибка выполнения: {ex.Message}");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                        }
+                        break;
+
+                    case "validate":
+                        if (parts.Length < 3)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine("❌ Формат: /fsm validate <результат>");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                            break;
+                        }
+                        var validationResult = string.Join(" ", parts.Skip(2));
+                        try
+                        {
+                            Console.ForegroundColor = ConsoleColor.Yellow;
+                            Console.WriteLine("🔍 Выполняю валидацию через LLM...");
+                            Console.ResetColor();
+                            var (passed, feedback) = await taskStateMachine.ValidateAsync(validationResult);
+                            Console.ForegroundColor = passed ? ConsoleColor.Green : ConsoleColor.Red;
+                            Console.WriteLine($"Результат: {(passed ? "PASS ✅" : "FAIL ❌")}");
+                            Console.ResetColor();
+                            Console.WriteLine($"   {feedback}");
+                            Console.WriteLine();
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine($"❌ Ошибка валидации: {ex.Message}");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                        }
+                        break;
+
+                    case "transition":
+                        if (parts.Length < 3)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine("❌ Формат: /fsm transition <Planning|Execution|Validation|Done>");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                            break;
+                        }
+                        var targetStageStr = parts[2];
+                        if (Enum.TryParse<TaskStage>(targetStageStr, ignoreCase: true, out var targetStage))
+                        {
+                            try
+                            {
+                                taskStateMachine.Transition(targetStage);
+                                Console.ForegroundColor = ConsoleColor.Green;
+                                Console.WriteLine($"✅ Переход выполнен: {targetStage}");
+                                Console.ResetColor();
+                                Console.WriteLine($"   Шаг: {taskStateMachine.Step.Number}/{taskStateMachine.Step.Total} — {taskStateMachine.Step.Description}");
+                                Console.WriteLine($"   Действие: {taskStateMachine.NextAction}");
+                                Console.WriteLine();
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.ForegroundColor = ConsoleColor.Red;
+                                Console.WriteLine($"❌ Ошибка перехода: {ex.Message}");
+                                Console.ResetColor();
+                                Console.WriteLine();
+                            }
+                        }
+                        else
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine($"❌ Неизвестный этап: '{targetStageStr}'. Доступны: Requirements, Planning, Execution, Validation, Done");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                        }
+                        break;
+
+                    case "pause":
+                        try
+                        {
+                            // Сохраняем состояние в файл перед паузой
+                            var pauseFile = "fsm_state.json";
+                            var json = taskStateMachine.ToJson();
+                            File.WriteAllText(pauseFile, json, Encoding.UTF8);
+                            
+                            taskStateMachine.Pause();
+                            Console.ForegroundColor = ConsoleColor.Yellow;
+                            Console.WriteLine("⏸ Задача поставлена на паузу");
+                            Console.ResetColor();
+                            Console.WriteLine($"   Состояние сохранено в: {pauseFile}");
+                            Console.WriteLine("   Для продолжения: /fsm resume");
+                            Console.WriteLine();
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine($"❌ Ошибка: {ex.Message}");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                        }
+                        break;
+
+                    case "resume":
+                        try
+                        {
+                            // Пытаемся загрузить состояние из файла
+                            var resumeFile = "fsm_state.json";
+                            if (File.Exists(resumeFile))
+                            {
+                                var json = File.ReadAllText(resumeFile, Encoding.UTF8);
+                                var loaded = TaskStateMachine.FromJson(json);
+                                
+                                // Загружаем состояние в текущий TaskStateMachine
+                                taskStateMachine.LoadState(loaded.GetState());
+                                
+                                Console.ForegroundColor = ConsoleColor.Green;
+                                Console.WriteLine($"▶ Задача возобновлена из: {resumeFile}");
+                                Console.ResetColor();
+                                Console.WriteLine($"   Этап: {taskStateMachine.Stage}");
+                                Console.WriteLine($"   Шаг: {taskStateMachine.Step.Number}/{taskStateMachine.Step.Total} — {taskStateMachine.Step.Description}");
+                                
+                                // Показываем статус сбора требований если на этапе Requirements
+                                var reqStatusLoad = taskStateMachine.GetRequirementsStatus();
+                                if (reqStatusLoad is not null)
+                                {
+                                    Console.WriteLine($"   Вопросы: {reqStatusLoad.AnsweredQuestions}/{reqStatusLoad.TotalQuestions} задано");
+                                    if (!reqStatusLoad.IsComplete)
+                                    {
+                                        var nextQ = taskStateMachine.AskNextQuestion();
+                                        if (nextQ is not null)
+                                        {
+                                            Console.WriteLine($"   Следующий вопрос: {nextQ}");
+                                        }
+                                    }
+                                }
+                                Console.WriteLine();
+                            }
+                            else
+                            {
+                                // Если файла нет — просто возобновляем
+                                taskStateMachine.Resume();
+                                Console.ForegroundColor = ConsoleColor.Green;
+                                Console.WriteLine("▶ Задача возобновлена");
+                                Console.ResetColor();
+                                Console.WriteLine();
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine($"❌ Ошибка: {ex.Message}");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                        }
+                        break;
+
+                    case "reset":
+                        try
+                        {
+                            // Сбрасываем состояние и удаляем файл
+                            taskStateMachine.ResetAfterCompletion();
+                            
+                            var resetFile = "fsm_state.json";
+                            if (File.Exists(resetFile))
+                            {
+                                File.Delete(resetFile);
+                                Console.ForegroundColor = ConsoleColor.Yellow;
+                                Console.WriteLine($"🗑 Файл состояния удалён: {resetFile}");
+                                Console.ResetColor();
+                            }
+                            
+                            Console.ForegroundColor = ConsoleColor.Green;
+                            Console.WriteLine("✅ Состояние FSM сброшено");
+                            Console.WriteLine($"   Этап: {taskStateMachine.Stage}");
+                            Console.WriteLine($"   Шаг: {taskStateMachine.Step.Number}/{taskStateMachine.Step.Total} — {taskStateMachine.Step.Description}");
+                            Console.WriteLine();
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine($"❌ Ошибка: {ex.Message}");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                        }
+                        break;
+
+                    case "save":
+                        if (parts.Length < 3)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine("❌ Формат: /fsm save <файл.json>");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                            break;
+                        }
+                        var saveFile = parts[2];
+                        try
+                        {
+                            var json = taskStateMachine.ToJson();
+                            File.WriteAllText(saveFile, json, Encoding.UTF8);
+                            Console.ForegroundColor = ConsoleColor.Green;
+                            Console.WriteLine($"✅ Состояние сохранено в {saveFile}");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine($"❌ Ошибка сохранения: {ex.Message}");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                        }
+                        break;
+
+                     case "load":
+                         if (parts.Length < 3)
+                         {
+                             Console.ForegroundColor = ConsoleColor.Red;
+                             Console.WriteLine("❌ Формат: /fsm load <файл.json>");
+                             Console.ResetColor();
+                             Console.WriteLine();
+                             break;
+                         }
+                         var loadFile = parts[2];
+                         if (!File.Exists(loadFile))
+                         {
+                             Console.ForegroundColor = ConsoleColor.Red;
+                             Console.WriteLine($"❌ Файл не найден: {loadFile}");
+                             Console.ResetColor();
+                             Console.WriteLine();
+                             break;
+                         }
+                          try
+                          {
+                              var json = File.ReadAllText(loadFile, Encoding.UTF8);
+                              var loaded = TaskStateMachine.FromJson(json);
+                              
+                              // Загружаем состояние в текущий TaskStateMachine
+                              taskStateMachine.LoadState(loaded.GetState());
+                              
+                              Console.ForegroundColor = ConsoleColor.Green;
+                              Console.WriteLine($"✅ Состояние загружено из {loadFile}");
+                              Console.ResetColor();
+                              Console.WriteLine($"   Этап: {taskStateMachine.Stage}");
+                              Console.WriteLine($"   Шаг: {taskStateMachine.Step.Number}/{taskStateMachine.Step.Total} — {taskStateMachine.Step.Description}");
+                              
+                              // Показываем статус сбора требований если на этапе Requirements
+                              var reqStatusLoad = taskStateMachine.GetRequirementsStatus();
+                              if (reqStatusLoad is not null)
+                              {
+                                  Console.WriteLine($"   Вопросы: {reqStatusLoad.AnsweredQuestions}/{reqStatusLoad.TotalQuestions} задано");
+                                  if (!reqStatusLoad.IsComplete)
+                                  {
+                                      Console.WriteLine($"   Следующий вопрос: {taskStateMachine.AskNextQuestion() ?? "(все заданы)"}");
+                                  }
+                              }
+                              Console.WriteLine();
+                          }
+                          catch (Exception ex)
+                          {
+                              Console.ForegroundColor = ConsoleColor.Red;
+                              Console.WriteLine($"❌ Ошибка загрузки: {ex.Message}");
+                              Console.ResetColor();
+                              Console.WriteLine();
+                          }
+                         break;
+
+                    case "history":
+                        Console.ForegroundColor = ConsoleColor.Yellow;
+                        Console.WriteLine("📜 История переходов:");
+                        Console.ResetColor();
+                        var history = taskStateMachine.History;
+                        if (history.Count == 0)
+                        {
+                            Console.WriteLine("   (пусто)");
+                        }
+                        else
+                        {
+                            foreach (var h in history)
+                            {
+                                Console.WriteLine($"   [{h.Stage}] шаг #{h.StepNumber}: {h.StepDescription} (завершено: {h.CompletedAt})");
+                            }
+                        }
+                        Console.WriteLine();
+                        break;
+
+                    case "dialog":
+                        Console.ForegroundColor = ConsoleColor.Yellow;
+                        Console.WriteLine("💬 История диалога текущего этапа:");
+                        Console.ResetColor();
+                        var dialogHistory = taskStateMachine.GetDialogHistory();
+                        if (dialogHistory.Count == 0)
+                        {
+                            Console.WriteLine("   (пусто)");
+                        }
+                        else
+                        {
+                            foreach (var d in dialogHistory)
+                            {
+                                var color = d.Role switch
+                                {
+                                    "user" => ConsoleColor.Green,
+                                    "agent" => ConsoleColor.Cyan,
+                                    _ => ConsoleColor.White,
+                                };
+                                Console.ForegroundColor = color;
+                                Console.Write($"   [{d.Role,-8}] ");
+                                Console.ResetColor();
+                                Console.WriteLine(d.Text);
+                            }
+                        }
+                        Console.WriteLine();
+                        break;
+
+                      case "help":
+                          Console.ForegroundColor = ConsoleColor.Yellow;
+                          Console.WriteLine("📋 Помощь по командам TaskStateMachine:");
+                          Console.ResetColor();
+                          Console.WriteLine("   /fsm — статус");
+                          Console.WriteLine("   /fsm status — текущий статус с деталями сбора требований");
+                          Console.WriteLine("   /fsm questions <вопрос1;вопрос2> — задать вопросы вручную");
+                          Console.WriteLine("   /fsm answer <ответ> — ответить на текущий вопрос");
+                          Console.WriteLine("   /fsm next — показать следующий вопрос");
+                          Console.WriteLine("   /fsm plan — выполнить планирование через LLM");
+                          Console.WriteLine("   /fsm execute <шаг> — выполнить шаг через LLM");
+                          Console.WriteLine("   /fsm validate <результат> — валидация через LLM");
+                          Console.WriteLine("   /fsm transition <этап> — перейти в этап");
+                          Console.WriteLine("   /fsm pause — пауза (состояние автоматически сохраняется в fsm_state.json)");
+                          Console.WriteLine("   /fsm resume — возобновление (загружает состояние из fsm_state.json)");
+                          Console.WriteLine("   /fsm reset — сбросить состояние и удалить fsm_state.json");
+                          Console.WriteLine("   /fsm save / load — сохранить / загрузить состояние");
+                          Console.WriteLine("   /fsm history — история переходов");
+                          Console.WriteLine("   /fsm dialog — история диалога");
+                          Console.WriteLine();
+                          Console.WriteLine("   Автозапуск: при вводе 'спроектируй', 'составь' и т.п.");
+                          Console.WriteLine("   Вопросы задаются по одному. Введите /skip чтобы пропустить.");
+                         Console.WriteLine();
+                         break;
+
+                    default:
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine($"❌ Неизвестная команда FSM: {fsmCmd}. Введите /fsm help для подсказки.");
+                        Console.ResetColor();
+                        Console.WriteLine();
+                        break;
+                }
+                continue;
+
             case "/save":
                 {
                     Console.ForegroundColor = ConsoleColor.Yellow;
@@ -2364,7 +2977,7 @@ while (true)
 
             default:
                 Console.ForegroundColor = ConsoleColor.Red;
-                Console.WriteLine($"❌ Неизвестная команда: {command}. Доступны: /status, /model, /system, /maxtokens, /stop, /temp, /retry, /retrydelay, /loglevel, /metrics, /adaptive, /planner, /memory, /context, /facts, /branch, /save");
+                Console.WriteLine($"❌ Неизвестная команда: {command}. Доступны: /status, /model, /system, /maxtokens, /stop, /temp, /retry, /retrydelay, /loglevel, /metrics, /adaptive, /planner, /memory, /context, /facts, /branch, /save, /fsm");
                 Console.ResetColor();
                 Console.WriteLine();
                 continue;
@@ -2373,6 +2986,192 @@ while (true)
 
     if (string.IsNullOrEmpty(input))
     {
+        continue;
+    }
+
+    // === Автоматический запуск FSM при ключевых словах ===
+    var fsmKeywords = new[] {
+        "спроектируй", "спроектируйте",
+        "составь", "составьте",
+        "разработай", "разработайте",
+        "создай", "создайте",
+        "спланируй", "спланируйте",
+        "реализуй", "реализуйте",
+        "подготовь", "подготовьте",
+        "напиши", "напишите",
+        "сделай", "сделайте",
+        "разработай", "разработайте"
+    };
+
+    var lowerInput = input.ToLowerInvariant();
+    var isFsmTrigger = fsmKeywords.Any(kw => lowerInput.StartsWith(kw + " ") || lowerInput.StartsWith(kw + "，") || lowerInput == kw);
+
+    if (isFsmTrigger)
+    {
+        Console.ForegroundColor = ConsoleColor.Cyan;
+        Console.WriteLine("📋 Автозапуск TaskStateMachine...");
+        Console.ResetColor();
+        Console.WriteLine();
+
+        // Проверяем статус сбора требований
+        var reqStatus = taskStateMachine.GetRequirementsStatus();
+
+        if (reqStatus is not null && !reqStatus.IsComplete)
+        {
+            // Сбор требований активен — это ответ пользователя на текущий вопрос
+            // Записываем ответ и задаём следующий вопрос
+            var answeredCount = reqStatus.AnsweredQuestions;
+            var totalQuestions = reqStatus.TotalQuestions;
+
+            if (answeredCount == 0)
+            {
+                // Первый вызов — генерируем вопросы и задаём первый
+                Console.WriteLine("📝 Начинаю сбор требований...");
+                Console.WriteLine();
+
+                var nextQuestion = await taskStateMachine.InitializeRequirementsAsync(input);
+
+                if (nextQuestion is null)
+                {
+                    // Все вопросы заданы — переходим к Planning
+                    Console.ForegroundColor = ConsoleColor.Green;
+                    Console.WriteLine("✅ Все вопросы заданы. Перехожу к планированию...");
+                    Console.ResetColor();
+                    Console.WriteLine();
+
+                    var fsmResult = await taskStateMachine.RunAutoAsync(input);
+                    Console.WriteLine();
+                    Console.ForegroundColor = fsmResult.IsSuccess ? ConsoleColor.Green : ConsoleColor.Yellow;
+                    Console.WriteLine($"✅ {fsmResult.Message}");
+                    Console.ResetColor();
+                    Console.WriteLine();
+                }
+                else
+                {
+                    Console.ForegroundColor = ConsoleColor.Cyan;
+                    Console.WriteLine($"   Вопрос 1/{reqStatus.TotalQuestions}:");
+                    Console.ResetColor();
+                    Console.WriteLine($"   {nextQuestion}");
+                    Console.WriteLine();
+                    Console.WriteLine("   Введите ответ (или /skip чтобы пропустить вопросы):");
+                }
+            }
+            else
+            {
+                // Это ответ пользователя — записываем и задаём следующий вопрос
+                Console.WriteLine($"💬 Ваш ответ: \"{input}\"");
+                Console.WriteLine();
+
+                taskStateMachine.ReceiveAnswer(input);
+
+                var nextQuestion = taskStateMachine.AskNextQuestion();
+                var newStatus = taskStateMachine.GetRequirementsStatus();
+
+                if (nextQuestion is null)
+                {
+                    Console.ForegroundColor = ConsoleColor.Green;
+                    Console.WriteLine($"✅ Все {totalQuestions} вопросов задано. Перехожу к планированию...");
+                    Console.ResetColor();
+                    Console.WriteLine();
+
+                    var fsmResult = await taskStateMachine.RunAutoAsync(input);
+                    Console.WriteLine();
+                    Console.ForegroundColor = fsmResult.IsSuccess ? ConsoleColor.Green : ConsoleColor.Yellow;
+                    Console.WriteLine($"✅ {fsmResult.Message}");
+                    Console.ResetColor();
+                    Console.WriteLine();
+                }
+                else
+                {
+                    Console.ForegroundColor = ConsoleColor.Green;
+                    Console.WriteLine($"✅ Ответ принят. ({newStatus.AnsweredQuestions}/{newStatus.TotalQuestions})");
+                    Console.ResetColor();
+                    Console.WriteLine();
+
+                    Console.ForegroundColor = ConsoleColor.Cyan;
+                    Console.WriteLine($"   Вопрос {newStatus.AnsweredQuestions + 1}/{newStatus.TotalQuestions}:");
+                    Console.ResetColor();
+                    Console.WriteLine($"   {nextQuestion}");
+                    Console.WriteLine();
+                    Console.WriteLine("   Введите ответ (или /skip чтобы пропустить вопросы):");
+                }
+            }
+        }
+        else
+        {
+            // Первый вызов или требования уже собраны — запускаем полный цикл
+            var fsmResult = await taskStateMachine.RunAutoAsync(input);
+            Console.WriteLine();
+            Console.ForegroundColor = fsmResult.IsSuccess ? ConsoleColor.Green : ConsoleColor.Yellow;
+            Console.WriteLine($"✅ {fsmResult.Message}");
+            Console.ResetColor();
+            Console.WriteLine();
+        }
+        continue;
+    }
+
+    // === Обработка /skip во время сбора требований ===
+    if (input.ToLowerInvariant() == "/skip")
+    {
+        var reqStatus2 = taskStateMachine.GetRequirementsStatus();
+        if (reqStatus2 is not null && !reqStatus2.IsComplete)
+        {
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine("⏭ Пропускаю вопросы. Перехожу к планированию...");
+            Console.ResetColor();
+            Console.WriteLine();
+
+            var fsmResult = await taskStateMachine.RunAutoAsync(input);
+            Console.WriteLine();
+            Console.ForegroundColor = fsmResult.IsSuccess ? ConsoleColor.Green : ConsoleColor.Yellow;
+            Console.WriteLine($"✅ {fsmResult.Message}");
+            Console.ResetColor();
+            Console.WriteLine();
+            continue;
+        }
+    }
+
+    // === Если FSM ожидает ответ — это ответ пользователя ===
+    var reqStatusNormal = taskStateMachine.GetRequirementsStatus();
+    if (reqStatusNormal is not null && !reqStatusNormal.IsComplete)
+    {
+        // FSM ожидает ответ — записываем и задаём следующий вопрос
+        Console.WriteLine($"💬 Ваш ответ: \"{input}\"");
+        Console.WriteLine();
+
+        taskStateMachine.ReceiveAnswer(input);
+
+        var nextQuestion = taskStateMachine.AskNextQuestion();
+        var newStatus = taskStateMachine.GetRequirementsStatus();
+
+        if (nextQuestion is null)
+        {
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($"✅ Все {reqStatusNormal.TotalQuestions} вопросов задано. Перехожу к планированию...");
+            Console.ResetColor();
+            Console.WriteLine();
+
+            var fsmResult = await taskStateMachine.RunAutoAsync(input);
+            Console.WriteLine();
+            Console.ForegroundColor = fsmResult.IsSuccess ? ConsoleColor.Green : ConsoleColor.Yellow;
+            Console.WriteLine($"✅ {fsmResult.Message}");
+            Console.ResetColor();
+            Console.WriteLine();
+        }
+        else
+        {
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($"✅ Ответ принят. ({newStatus.AnsweredQuestions}/{newStatus.TotalQuestions})");
+            Console.ResetColor();
+            Console.WriteLine();
+
+            Console.ForegroundColor = ConsoleColor.Cyan;
+            Console.WriteLine($"   Вопрос {newStatus.AnsweredQuestions + 1}/{newStatus.TotalQuestions}:");
+            Console.ResetColor();
+            Console.WriteLine($"   {nextQuestion}");
+            Console.WriteLine();
+            Console.WriteLine("   Введите ответ (или /skip чтобы пропустить вопросы):");
+        }
         continue;
     }
 
