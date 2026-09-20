@@ -19,13 +19,20 @@ public class TaskStateMachine
     private readonly AgentProfile? _agentProfile;
 
     private TaskState _state;
-    private static readonly Dictionary<TaskStage, List<TaskStage>> _allowedTransitions = new()
+    /// <summary>
+    /// Матрица допустимых переходов между состояниями FSM.
+    /// Ключ — текущее состояние, значение — список состояний, в которые можно перейти.
+    /// Любая попытка перехода, отсутствующего в этой матрице, считается ошибкой.
+    /// </summary>
+    public static readonly Dictionary<TaskStage, List<TaskStage>> AllowedTransitions = new()
     {
         [TaskStage.Requirements] = new() { TaskStage.Planning },
-        [TaskStage.Planning]    = new() { TaskStage.Execution },
-        [TaskStage.Execution]   = new() { TaskStage.Validation },
+        [TaskStage.Planning]    = new() { TaskStage.Execution, TaskStage.Requirements },
+        [TaskStage.Execution]   = new() { TaskStage.Validation, TaskStage.Planning },
         [TaskStage.Validation]  = new() { TaskStage.Done, TaskStage.Execution },
         [TaskStage.Done]        = new(),
+        [TaskStage.Paused]      = new() { TaskStage.Resuming },
+        [TaskStage.Resuming]    = new(),
     };
 
     private static readonly Dictionary<TaskStage, (int Number, int Total, string Description)> _defaultSteps = new()
@@ -48,7 +55,11 @@ public class TaskStateMachine
             NextAction: "Ответ пользователя на текущий вопрос",
             History: new List<HistoryEntry>(),
             Paused: false,
-            RequirementsContext: null);
+            RequirementsContext: null,
+            PlanApproved: false,
+            Artifacts: new List<ArtifactEntry>(),
+            ValidationPassed: false,
+            ValidationFeedback: null);
     }
 
     /// <summary>
@@ -67,7 +78,11 @@ public class TaskStateMachine
             NextAction: "Ответ пользователя на текущий вопрос",
             History: new List<HistoryEntry>(),
             Paused: false,
-            RequirementsContext: null);
+            RequirementsContext: null,
+            PlanApproved: false,
+            Artifacts: new List<ArtifactEntry>(),
+            ValidationPassed: false,
+            ValidationFeedback: null);
     }
 
     private TaskStateMachine(TaskState state)
@@ -91,33 +106,147 @@ public class TaskStateMachine
 
     public RequirementsContext? RequirementsContext => _state.RequirementsContext;
 
+    public bool PlanApproved => _state.PlanApproved;
+
+    public IReadOnlyList<ArtifactEntry> Artifacts => _state.Artifacts;
+
+    public bool ValidationPassed => _state.ValidationPassed;
+
+    public string? ValidationFeedback => _state.ValidationFeedback;
+
     // ── Basic methods ───────────────────────────────────────────
 
     /// <summary>
-    /// Переход между этапами с проверкой допустимости.
+    /// Проверка допустимости перехода из текущего состояния в targetStage.
+    /// Проверяет матрицу переходов и бизнес-правила (предусловия).
+    /// </summary>
+    public TransitionResult CanTransition(TaskStage targetStage)
+    {
+        var currentStage = _state.Stage;
+        var allowedNext = AllowedTransitions.GetValueOrDefault(currentStage, new List<TaskStage>());
+
+        // Если целевое состояние не в матрице разрешённых переходов — запрещаем
+        if (!allowedNext.Contains(targetStage))
+        {
+            return new TransitionResult(
+                Allowed: false,
+                Reason: $"Нельзя перейти из '{currentStage}' в '{targetStage}'. Сначала нужно завершить этап '{GetPrecedingStage(currentStage, targetStage)}'.",
+                CurrentStage: currentStage.ToString(),
+                TargetStage: targetStage.ToString(),
+                AllowedNext: allowedNext.Select(s => s.ToString()).ToList(),
+                MissingConditions: null);
+        }
+
+        // Проверяем бизнес-правила (предусловия) для каждого перехода
+        var missingConditions = new List<string>();
+
+        if (currentStage == TaskStage.Requirements && targetStage == TaskStage.Planning)
+        {
+            if (_state.RequirementsContext is null)
+            {
+                missingConditions.Add("requirements_context");
+            }
+            else if (_state.RequirementsContext.CurrentQuestionIndex < _state.RequirementsContext.Questions.Count)
+            {
+                missingConditions.Add("all_questions_answered");
+            }
+        }
+
+        if (currentStage == TaskStage.Planning && targetStage == TaskStage.Execution)
+        {
+            if (!_state.PlanApproved)
+                missingConditions.Add("plan_approved");
+        }
+
+        if (currentStage == TaskStage.Execution && targetStage == TaskStage.Validation)
+        {
+            if (_state.Artifacts.Count == 0)
+                missingConditions.Add("artifacts_present");
+        }
+
+        if (currentStage == TaskStage.Validation && targetStage == TaskStage.Done)
+        {
+            if (!_state.ValidationPassed)
+                missingConditions.Add("validation_passed");
+        }
+
+        if (currentStage == TaskStage.Validation && targetStage == TaskStage.Execution)
+        {
+            if (_state.ValidationPassed)
+                missingConditions.Add("validation_failed");
+        }
+
+        var conditionsMet = missingConditions.Count == 0;
+
+        string? reason = null;
+        if (!conditionsMet)
+        {
+            var conditionDescriptions = new Dictionary<string, string>
+            {
+                ["requirements_context"] = "Необходим контекст требований (вопросы заданы и отвечены).",
+                ["all_questions_answered"] = $"Не все вопросы отвечены: {_state.RequirementsContext?.CurrentQuestionIndex ?? 0} из {_state.RequirementsContext?.Questions.Count ?? 0}.",
+                ["plan_approved"] = "План не утверждён. Вызовите approve_plan().",
+                ["artifacts_present"] = "Нет артефактов. Добавьте артефакты через add_artifact().",
+                ["validation_passed"] = "Валидация не пройдена. Вызовите set_validation_result(true).",
+                ["validation_failed"] = "Валидация пройдена. Для возврата к Execution вызовите set_validation_result(false, feedback).",
+            };
+
+            var desc = missingConditions
+                .Select(c => conditionDescriptions.GetValueOrDefault(c, c))
+                .Aggregate((a, b) => a + " " + b);
+            reason = $"Переход запрещён: {desc}";
+        }
+
+        return new TransitionResult(
+            Allowed: conditionsMet,
+            Reason: reason,
+            CurrentStage: currentStage.ToString(),
+            TargetStage: targetStage.ToString(),
+            AllowedNext: allowedNext.Select(s => s.ToString()).ToList(),
+            MissingConditions: conditionsMet ? null : missingConditions);
+    }
+
+    /// <summary>
+    /// Определяет название предыдущего этапа для сообщения об ошибке.
+    /// </summary>
+    private static string GetPrecedingStage(TaskStage current, TaskStage target)
+    {
+        // Для перехода из Requirements в Execution — нужно сначала завершить Planning
+        return target switch
+        {
+            TaskStage.Planning => "requirements",
+            TaskStage.Execution => "planning",
+            TaskStage.Validation => "execution",
+            TaskStage.Done => "validation",
+            _ => current.ToString()
+        };
+    }
+
+    /// <summary>
+    /// Переход между этапами с жёсткой валидацией.
+    /// Перед переходом вызывает CanTransition. Если переход разрешён — выполняет его.
+    /// Если переход не разрешён — выбрасывает InvalidTransitionError.
     /// </summary>
     public void Transition(TaskStage nextStage)
     {
+        // Проверяем, не на паузе ли задача
         if (_state.Paused)
             throw new InvalidOperationException("Нельзя перейти этап, пока задача на паузе. Вызовите Resume().");
 
+        // Проверяем, не завершена ли задача
         if (_state.Stage == TaskStage.Done)
             throw new InvalidOperationException("Нельзя перейти из этапа Done.");
 
-        var allowed = _allowedTransitions[_state.Stage];
-        if (!allowed.Contains(nextStage))
-            throw new InvalidOperationException(
-                $"Недопустимый переход из '{_state.Stage}' в '{nextStage}'. Разрешены: [{string.Join(", ", allowed)}]");
+        // Вызываем CanTransition для проверки
+        var result = CanTransition(nextStage);
 
-        // Для requirements → planning проверяем, что все вопросы заданы
-        if (_state.Stage == TaskStage.Requirements && nextStage == TaskStage.Planning)
+        if (!result.Allowed)
         {
-            if (_state.RequirementsContext is null)
-                throw new InvalidOperationException("Нельзя перейти в Planning без контекста требований.");
-
-            if (_state.RequirementsContext.CurrentQuestionIndex < _state.RequirementsContext.Questions.Count)
-                throw new InvalidOperationException(
-                    $"Нельзя перейти в Planning: задан {_state.RequirementsContext.CurrentQuestionIndex} из {_state.RequirementsContext.Questions.Count} вопросов.");
+            throw new InvalidTransitionError(
+                currentStage: _state.Stage,
+                targetStage: nextStage,
+                allowedNext: result.AllowedNext.Select(s => Enum.Parse<TaskStage>(s)).ToList(),
+                reason: result.Reason ?? "Переход запрещён бизнес-правилами.");
         }
 
         // Сохраняем завершённый шаг в историю
@@ -198,7 +327,11 @@ public class TaskStateMachine
             NextAction: "Ответ пользователя на текущий вопрос",
             History: new List<HistoryEntry>(),
             Paused: false,
-            RequirementsContext: null);
+            RequirementsContext: null,
+            PlanApproved: false,
+            Artifacts: new List<ArtifactEntry>(),
+            ValidationPassed: false,
+            ValidationFeedback: null);
     }
 
     /// <summary>
@@ -353,6 +486,80 @@ public class TaskStateMachine
             return Array.Empty<DialogEntry>();
 
         return _state.RequirementsContext.DialogHistory;
+    }
+
+    // ── Business Rule Methods ───────────────────────────────────
+
+    /// <summary>
+    /// Утверждает план (ставит plan_approved = True).
+    /// Необходимое условие для перехода из Planning в Execution.
+    /// </summary>
+    public void ApprovePlan()
+    {
+        if (_state.Stage != TaskStage.Planning)
+            throw new InvalidOperationException("Утвердить план можно только на этапе Planning.");
+
+        _state = _state with { PlanApproved = true };
+    }
+
+    /// <summary>
+    /// Добавляет артефакт, созданный на этапе Execution.
+    /// Необходимое условие для перехода из Execution в Validation.
+    /// </summary>
+    public void AddArtifact(string name, string path)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            throw new ArgumentException("Name не может быть пустым.", nameof(name));
+        if (string.IsNullOrWhiteSpace(path))
+            throw new ArgumentException("Path не может быть пустым.", nameof(path));
+
+        var artifact = new ArtifactEntry(
+            Name: name,
+            Path: path,
+            CreatedAt: DateTime.UtcNow.ToString("o"));
+
+        var newArtifacts = new List<ArtifactEntry>(_state.Artifacts) { artifact };
+        _state = _state with { Artifacts = newArtifacts };
+    }
+
+    /// <summary>
+    /// Устанавливает результат валидации.
+    /// passed = true — для перехода Validation → Done.
+    /// passed = false — для возврата Validation → Execution (с описанием причины).
+    /// </summary>
+    public void SetValidationResult(bool passed, string? feedback = null)
+    {
+        if (_state.Stage != TaskStage.Validation)
+            throw new InvalidOperationException("Установить результат валидации можно только на этапе Validation.");
+
+        _state = _state with
+        {
+            ValidationPassed = passed,
+            ValidationFeedback = feedback
+        };
+    }
+
+    /// <summary>
+    /// Возвращает список состояний, в которые можно перейти из текущего,
+    /// с учётом и матрицы переходов, и бизнес-правил.
+    /// </summary>
+    public IReadOnlyList<TransitionOption> GetAllowedTransitions()
+    {
+        var currentStage = _state.Stage;
+        var allowedNext = AllowedTransitions.GetValueOrDefault(currentStage, new List<TaskStage>());
+
+        var options = new List<TransitionOption>();
+
+        foreach (var target in allowedNext)
+        {
+            var result = CanTransition(target);
+            options.Add(new TransitionOption(
+                Target: target,
+                ConditionsMet: result.Allowed,
+                Missing: result.MissingConditions ?? Array.Empty<string>()));
+        }
+
+        return options;
     }
 
     // ── LLM Integration ─────────────────────────────────────────
@@ -793,7 +1000,11 @@ public class TaskStateMachine
                 NextAction: "Ответ пользователя на текущий вопрос",
                 History: new List<HistoryEntry>(),
                 Paused: false,
-                RequirementsContext: null);
+                RequirementsContext: null,
+                PlanApproved: false,
+                Artifacts: new List<ArtifactEntry>(),
+                ValidationPassed: false,
+                ValidationFeedback: null);
         }
 
         // Если на этапе Requirements и нет вопросов — используем запрос пользователя как контекст
@@ -843,6 +1054,9 @@ public class TaskStateMachine
         Console.WriteLine($"   {planResult}");
         Console.WriteLine();
 
+        // Утверждаем план — необходимо для перехода в Execution
+        ApprovePlan();
+
         // Переходим к Execution
         if (Stage != TaskStage.Execution)
         {
@@ -870,6 +1084,9 @@ public class TaskStateMachine
         Console.WriteLine($"   {execResult}");
         Console.WriteLine();
 
+        // Добавляем артефакт — необходимо для перехода в Validation
+        AddArtifact("execution_result", "artifact://exec_result");
+
         // Переходим к Validation
         if (Stage != TaskStage.Validation)
         {
@@ -890,6 +1107,9 @@ public class TaskStateMachine
         Console.WriteLine("   Проверяю результат...");
 
         var (passed, feedback) = await ValidateAsync(execResult);
+
+        // Устанавливаем результат валидации — необходимо для перехода в Done или Execution
+        SetValidationResult(passed, passed ? null : feedback);
 
         Console.ForegroundColor = passed ? ConsoleColor.Green : ConsoleColor.Red;
         Console.WriteLine($"Результат: {(passed ? "PASS ✅" : "FAIL ❌")}");
@@ -942,6 +1162,8 @@ public class TaskStateMachine
             TaskStage.Execution    => "Выполнение текущего шага плана",
             TaskStage.Validation   => "Результат проверки качества",
             TaskStage.Done         => "Задача завершена",
+            TaskStage.Paused       => "Задача приостановлена",
+            TaskStage.Resuming     => "Задача возобновляется",
             _                      => "Неизвестное действие"
         };
     }
@@ -959,4 +1181,12 @@ public class TaskStateMachine
         int AnsweredQuestions,
         int TotalDialogEntries,
         bool IsComplete);
+
+    /// <summary>
+    /// Опция перехода, возвращаемая GetAllowedTransitions.
+    /// </summary>
+    public record TransitionOption(
+        TaskStage Target,
+        bool ConditionsMet,
+        IReadOnlyList<string> Missing);
 }

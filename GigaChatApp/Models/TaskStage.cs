@@ -2,6 +2,10 @@ namespace GigaChatApp.Models;
 
 /// <summary>
 /// Этап задачи в конечном автомате.
+/// Основные этапы: Requirements → Planning → Execution → Validation → Done.
+/// Служебные состояния (накладываются поверх основного этапа через флаг Paused):
+///   Paused — задача приостановлена.
+///   Resuming — задача возобновляется.
 /// </summary>
 public enum TaskStage
 {
@@ -28,5 +32,15 @@ public enum TaskStage
     /// <summary>
     /// Задача завершена.
     /// </summary>
-    Done
+    Done,
+
+    /// <summary>
+    /// Служебное состояние: задача приостановлена (накладывается поверх основного этапа).
+    /// </summary>
+    Paused,
+
+    /// <summary>
+    /// Служебное состояние: задача возобновляется (накладывается поверх основного этапа).
+    /// </summary>
+    Resuming
 }

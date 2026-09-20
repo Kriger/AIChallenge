@@ -30,6 +30,7 @@ public record RequirementsContext(
 
 /// <summary>
 /// Полное состояние конечного автомата задачи.
+/// Включает бизнес-правила для контролируемых переходов.
 /// </summary>
 public record TaskState(
     [property: JsonPropertyName("stage")] TaskStage Stage,
@@ -37,4 +38,8 @@ public record TaskState(
     [property: JsonPropertyName("next_action")] string NextAction,
     [property: JsonPropertyName("history")] List<HistoryEntry> History,
     [property: JsonPropertyName("paused")] bool Paused,
-    [property: JsonPropertyName("requirements_context")] RequirementsContext? RequirementsContext);
+    [property: JsonPropertyName("requirements_context")] RequirementsContext? RequirementsContext,
+    [property: JsonPropertyName("plan_approved")] bool PlanApproved,
+    [property: JsonPropertyName("artifacts")] List<ArtifactEntry> Artifacts,
+    [property: JsonPropertyName("validation_passed")] bool ValidationPassed,
+    [property: JsonPropertyName("validation_feedback")] string? ValidationFeedback);
