@@ -17,6 +17,10 @@ public class TaskStateMachine
     private readonly AuthClient? _authClient;
     private readonly GigaChatConfig? _config;
     private readonly AgentProfile? _agentProfile;
+    /// <summary>
+    /// Профиль агента (для проверки инвариантов).
+    /// </summary>
+    public AgentProfile? AgentProfile => _agentProfile;
 
     private TaskState _state;
     /// <summary>
@@ -574,6 +578,13 @@ public class TaskStateMachine
 
         var requirements = GetRequirementsResult();
         var systemMessage = BuildExtendedSystemMessage("planning", requirements);
+
+        Console.WriteLine($"   [FSM] System message length: {systemMessage.Length} chars");
+        Console.WriteLine($"   [FSM] Invariants count: {_agentProfile?.Invariants.Count ?? 0}");
+        if (_agentProfile?.Invariants.Count > 0)
+        {
+            Console.WriteLine($"   [FSM] First invariant: {_agentProfile.Invariants[0][..Math.Min(80, _agentProfile.Invariants[0].Length)]}");
+        }
 
         var messages = new List<ApiMessage>
         {

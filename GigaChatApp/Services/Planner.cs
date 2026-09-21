@@ -81,14 +81,14 @@ public class Planner
     /// Проверяет, нарушает ли запрос инварианты.
     /// Возвращает причину отказа или null, если нарушений нет.
     /// </summary>
-    public string? CheckInvariantViolation(string request, List<string> invariants)
+    public static string? CheckInvariantViolation(string request, List<string> invariants)
     {
         var lower = request.ToLowerInvariant();
 
         // Запрещённые технологии и паттерны, которые ищем в запросе
         var forbiddenTechs = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            "webforms", "web forms", "wcf", "monoлит", "monolith",
+            "webforms", "web forms", "wcf", "монолит", "monolith",
             "asp.net framework", "ef6", "entity framework 6",
             "winforms", "silverlight", "php", "java", "python",
             "ruby", "django", "flask", "spring", "laravel",
