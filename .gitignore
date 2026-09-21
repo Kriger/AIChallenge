@@ -34,3 +34,8 @@ Thumbs.db
 
 ## GigaCode
 .gigacode/
+
+## GigaChatApp data
+GigaChatApp/memory/
+GigaChatApp/profiles/
+GigaChatApp/fsm_state.json
