@@ -49,6 +49,13 @@ public sealed class HelpCommand : CommandHandler
         PrintCmd("fsm <status|questions|answer|next|transition|pause|resume|...>", "управление задачами");
         Console.WriteLine();
 
+        PrintYellow("── MCP GitHub ──");
+        PrintCmd("mcp connect", "подключиться к GitHub MCP");
+        PrintCmd("mcp tools", "список инструментов");
+        PrintCmd("mcp call <tool> <json>", "вызвать инструмент");
+        PrintCmd("mcp status", "статус подключения");
+        Console.WriteLine();
+
         PrintYellow("── Прочее ──");
         PrintCmd("save", "сохранить контекст");
         PrintCmd("clear", "очистить историю");

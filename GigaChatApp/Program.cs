@@ -180,6 +180,55 @@ foreach (var type in assembly.GetTypes()
 Console.WriteLine("✅ Команды зарегистрированы");
 Console.WriteLine();
 
+// Инициализация MCP GitHub
+McpGitHubService? mcpGitHubService = null;
+try
+{
+    var mcpEnabled = configuration.GetSection("Mcp").GetValue<bool>("Enabled", false);
+    if (mcpEnabled)
+    {
+        // Создаём делегат логирования, переиспользуя существующий logger
+        void Log(string message, LogLevel level)
+        {
+            var color = level switch
+            {
+                LogLevel.Error => ConsoleColor.Red,
+                LogLevel.Warning => ConsoleColor.Yellow,
+                LogLevel.Info => ConsoleColor.Green,
+                _ => ConsoleColor.Gray
+            };
+            Console.ForegroundColor = color;
+            Console.WriteLine(message);
+            Console.ResetColor();
+        }
+
+        mcpGitHubService = new McpGitHubService(Log, configuration);
+        Console.WriteLine("🔌 MCP GitHub инициализирован");
+
+        // Находим McpCommand и устанавливаем сервис
+        var mcpCmd = CommandRegistry.Commands
+            .Select(CommandRegistry.GetHandler)
+            .OfType<McpCommand>()
+            .FirstOrDefault();
+
+        if (mcpCmd is not null)
+        {
+            mcpCmd.McpService = mcpGitHubService;
+            Console.WriteLine("✅ McpCommand подключён к McpGitHubService");
+        }
+        else
+        {
+            Console.WriteLine("⚠️  McpCommand не найден в реестре");
+        }
+        Console.WriteLine();
+    }
+}
+catch (Exception ex)
+{
+    Console.WriteLine($"⚠️  Ошибка инициализации MCP: {ex.Message}");
+    Console.WriteLine();
+}
+
 // Загружаем контекст из предыдущей сессии
 ContextPersistence.LoadContext(agent);
 
@@ -217,6 +266,13 @@ while (true)
         // Сохраняем профиль агента
         AgentProfileManager.Save(agent.AgentProfile);
         Console.WriteLine($"💾 Профиль агента сохранён: {agent.AgentProfile.Name}");
+
+        // Освобождаем MCP-ресурсы
+        if (mcpGitHubService is not null)
+        {
+            await mcpGitHubService.DisposeAsync();
+            Console.WriteLine("🔌 MCP-соединение закрыто");
+        }
 
         Console.WriteLine();
         Console.ForegroundColor = ConsoleColor.Gray;
