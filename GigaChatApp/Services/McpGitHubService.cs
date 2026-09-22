@@ -71,11 +71,6 @@ public sealed class McpGitHubService : IAsyncDisposable
                 : argsStr.Split(' ', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
         }
 
-        Log($"📦 Command: {command}", LogLevel.Info);
-        Log($"📦 Args count: {args.Length}", LogLevel.Info);
-        for (int i = 0; i < args.Length; i++)
-            Log($"📦   args[{i}] = '{args[i]}'", LogLevel.Info);
-
         // Собираем env vars из конфига
         var envVars = new Dictionary<string, string?>();
         var envSection = githubSection.GetSection("EnvironmentVariables");
@@ -127,7 +122,6 @@ public sealed class McpGitHubService : IAsyncDisposable
             _client = await McpClient.CreateAsync(transport, null, null, cts.Token);
             _connected = true;
 
-            Log($"✅ MCP-сервер запущен, получение списка инструментов...", LogLevel.Info);
             // Загружаем список инструментов
             var toolsResult = await _client.ListToolsAsync();
             _tools = toolsResult.ToList();
@@ -168,15 +162,46 @@ public sealed class McpGitHubService : IAsyncDisposable
 
             Log($"Инструмент {toolName} выполнен успешно", LogLevel.Info);
 
-            return string.IsNullOrWhiteSpace(content)
-                ? result.Content.Select(c => c.ToString()).FirstOrDefault() ?? "(пустой результат)"
-                : content;
+            if (string.IsNullOrWhiteSpace(content))
+                return result.Content.Select(c => c.ToString()).FirstOrDefault() ?? "(пустой результат)";
+
+            // Форматируем JSON-ответы для читаемости
+            return FormatJson(content);
         }
         catch (Exception ex)
         {
             Log($"Ошибка вызова инструмента {toolName}: {ex.Message}", LogLevel.Error);
             throw;
         }
+    }
+
+    /// <summary>
+    /// Форматирует JSON: Unicode → UTF-8, pretty-print.
+    /// </summary>
+    private static string FormatJson(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return raw;
+
+        raw = raw.Trim();
+
+        // Если это JSON — форматируем
+        if (raw.StartsWith("[") || raw.StartsWith("{"))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(raw);
+                var formatted = doc.RootElement.GetRawText();
+                return System.Text.RegularExpressions.Regex.Unescape(formatted);
+            }
+            catch
+            {
+                return System.Text.RegularExpressions.Regex.Unescape(raw);
+            }
+        }
+
+        // Plain text — декодируем Unicode
+        return System.Text.RegularExpressions.Regex.Unescape(raw);
     }
 
     /// <summary>

@@ -3,6 +3,7 @@ using GigaChatApp.Commands;
 using GigaChatApp.Models;
 using GigaChatApp.Services;
 using GigaChatApp.Infrastructure;
+using System.Text.Json;
 
 Console.OutputEncoding = Encoding.UTF8;
 
@@ -180,8 +181,11 @@ foreach (var type in assembly.GetTypes()
 Console.WriteLine("✅ Команды зарегистрированы");
 Console.WriteLine();
 
-// Инициализация MCP GitHub
+// Инициализация MCP GitHub и реестра инструментов
 McpGitHubService? mcpGitHubService = null;
+McpTodoService? mcpTodoService = null;
+var mcpRegistry = new McpToolRegistry();
+
 try
 {
     var mcpEnabled = configuration.GetSection("Mcp").GetValue<bool>("Enabled", false);
@@ -216,9 +220,104 @@ try
             mcpCmd.McpService = mcpGitHubService;
             Console.WriteLine("✅ McpCommand подключён к McpGitHubService");
         }
-        else
+
+        // Инициализация TodoMCP
+        try
         {
-            Console.WriteLine("⚠️  McpCommand не найден в реестре");
+            var todoSection = configuration.GetSection("Mcp:Servers:Todo");
+            if (todoSection.Exists())
+            {
+                mcpTodoService = new McpTodoService(Log, configuration);
+                Console.WriteLine("📋 TodoMCP инициализирован");
+
+                var todoCmd = CommandRegistry.Commands
+                    .Select(CommandRegistry.GetHandler)
+                    .OfType<McpTodoCommand>()
+                    .FirstOrDefault();
+
+                if (todoCmd is not null)
+                {
+                    todoCmd.TodoService = mcpTodoService;
+                    Console.WriteLine("✅ McpTodoCommand подключён к McpTodoService");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"⚠️  Ошибка инициализации TodoMCP: {ex.Message}");
+        }
+
+        // Регистрируем инструменты из MCP-сервисов
+        try
+        {
+            // GitHub MCP tools
+            if (mcpGitHubService is not null)
+            {
+                // Сначала подключаем GitHub MCP
+                Console.WriteLine("🔌 Подключение к GitHub MCP для регистрации инструментов...");
+                try
+                {
+                    await mcpGitHubService.ConnectAsync();
+                    foreach (var tool in mcpGitHubService.Tools)
+                    {
+                        var serviceName = "github";
+                        mcpRegistry.Register(new McpToolRegistry.McpToolDefinition(
+                            Name: tool.Name,
+                            Description: tool.Description,
+                            ServiceName: serviceName,
+                            Call: async (args) =>
+                            {
+                                var dict = string.IsNullOrWhiteSpace(args)
+                                    ? null
+                                    : JsonSerializer.Deserialize<Dictionary<string, object?>>(args);
+                                return await mcpGitHubService.CallToolAsync(tool.Name, dict);
+                            }
+                        ));
+                    }
+                    Console.WriteLine($"  ✅ GitHub: зарегистрировано {mcpGitHubService.Tools.Count} инструментов");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"  ⚠️  GitHub MCP не подключён: {ex.Message}");
+                }
+            }
+
+            // TodoMCP tools
+            if (mcpTodoService is not null)
+            {
+                // Сначала подключаем TodoMCP
+                Console.WriteLine("📋 Подключение к TodoMCP для регистрации инструментов...");
+                try
+                {
+                    await mcpTodoService.ConnectAsync();
+                    foreach (var tool in mcpTodoService.Tools)
+                    {
+                        mcpRegistry.Register(new McpToolRegistry.McpToolDefinition(
+                            Name: tool.Name,
+                            Description: tool.Description,
+                            ServiceName: "todo",
+                            Call: async (args) =>
+                            {
+                                var dict = string.IsNullOrWhiteSpace(args)
+                                    ? null
+                                    : JsonSerializer.Deserialize<Dictionary<string, object?>>(args);
+                                return await mcpTodoService.CallToolAsync(tool.Name, dict);
+                            }
+                        ));
+                    }
+                    Console.WriteLine($"  ✅ TodoMCP: зарегистрировано {mcpTodoService.Tools.Count} инструментов");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"  ⚠️  TodoMCP не подключён: {ex.Message}");
+                }
+            }
+
+            Console.WriteLine();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"⚠️  Ошибка регистрации MCP-инструментов: {ex.Message}");
         }
         Console.WriteLine();
     }
@@ -231,6 +330,14 @@ catch (Exception ex)
 
 // Загружаем контекст из предыдущей сессии
 ContextPersistence.LoadContext(agent);
+
+// Подключаем MCP-реестр к агенту
+if (mcpRegistry.Tools.Count > 0)
+{
+    agent.McpRegistry = mcpRegistry;
+    Console.WriteLine($"🔧 MCP-реестр: {mcpRegistry.Tools.Count} инструментов доступно");
+}
+Console.WriteLine();
 
 Console.WriteLine("🔄 Инициализация подключения к GigaChat...");
 
@@ -271,7 +378,13 @@ while (true)
         if (mcpGitHubService is not null)
         {
             await mcpGitHubService.DisposeAsync();
-            Console.WriteLine("🔌 MCP-соединение закрыто");
+            Console.WriteLine("🔌 MCP GitHub-соединение закрыто");
+        }
+
+        if (mcpTodoService is not null)
+        {
+            await mcpTodoService.DisposeAsync();
+            Console.WriteLine("📋 TodoMCP-соединение закрыто");
         }
 
         Console.WriteLine();

@@ -81,6 +81,9 @@ public class ChatAgent
     /// <summary>Управление контекстом.</summary>
     public ContextManager ContextManager { get; }
 
+    /// <summary>Реестр MCP-инструментов.</summary>
+    public McpToolRegistry? McpRegistry { get; set; }
+
     /// <summary>Конфигурация GigaChat.</summary>
     public GigaChatConfig Config { get; set; } = null!;
 
@@ -187,8 +190,8 @@ public class ChatAgent
             }
         }
 
-        // 4. Обычный запрос — отправляем в API с контекстом
-        var result = await SendWithRetryAsync(userMessage, relevantFacts);
+        // 4. Обычный запрос — отправляем в API с контекстом и инструментами
+        var result = await SendWithRetryAsync(userMessage, relevantFacts, toolCallCount: 0);
 
         // 5. Извлекаем новые факты из диалога
         if (result.IsSuccess)
@@ -347,12 +350,9 @@ public class ChatAgent
     }
 
     /// <summary>
-    /// Отправляет запрос в API с интеллектуальным retry.
-    /// Retry только для transient-ошибок и 5xx. 4xx — сразу возвращаем ошибку.
+    /// Отправляет запрос в API с интеллектуальным retry и поддержкой MCP-инструментов.
     /// </summary>
-    /// <param name="userMessage">Сообщение пользователя.</param>
-    /// <param name="relevantFacts">Релевантные факты из памяти для контекста.</param>
-    private async Task<AgentResult> SendWithRetryAsync(string userMessage, List<Fact> relevantFacts)
+    private async Task<AgentResult> SendWithRetryAsync(string userMessage, List<Fact> relevantFacts, int toolCallCount = 0)
     {
         // Добавляем запрос в полную историю
         _history.Add(new ApiMessage { Role = "user", Content = userMessage });
@@ -371,7 +371,7 @@ public class ChatAgent
         Metrics.TotalContextTokens += contextResult.CompressedTokens;
         Metrics.ContextCompressionEnabled = ContextManager.Config.Enabled;
 
-        // Формируем расширенное системное сообщение с фактами и summary
+        // Формируем расширенное системное сообщение с фактами, summary и инструментами
         var extendedSystemMessage = BuildExtendedSystemMessage(relevantFacts, contextResult);
 
         // Логирование для отладки — что уходит в API
@@ -423,6 +423,62 @@ public class ChatAgent
                 _history.Add(assistantMessage);
                 MemoryManager.ShortTerm.Add("assistant", apiResponse.Content);
                 ContextManager.AddMessage(assistantMessage);
+
+                // === Проверяем tool-вызовы в ответе ===
+                if (McpRegistry is not null && McpRegistry.Tools.Count > 0)
+                {
+                    var toolCalls = McpToolRegistry.ParseToolCalls(apiResponse.Content);
+                    if (toolCalls.Count > 0 && toolCallCount < 5) // Лимит 5 итераций
+                    {
+                        Console.WriteLine();
+                        Console.ForegroundColor = ConsoleColor.Yellow;
+                        Console.WriteLine($"🔧 LLM вызвал {toolCalls.Count} инструмент(ов)...");
+                        Console.ResetColor();
+
+                        // Выполняем каждый инструмент
+                        foreach (var (toolName, toolArgs) in toolCalls)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Cyan;
+                            Console.Write($"  ⚡ {toolName}");
+                            Console.ResetColor();
+
+                            try
+                            {
+                                var result = await McpRegistry.ExecuteToolCall(toolName, toolArgs);
+                                Console.ForegroundColor = ConsoleColor.Green;
+                                Console.WriteLine(" ✅");
+                                Console.ResetColor();
+
+                                // Добавляем результат как user-сообщение (system должен быть первым!)
+                                var resultMsg = $"[Инструмент {toolName}]:\n{result}";
+                                var resultApiMessage = new ApiMessage { Role = "user", Content = resultMsg };
+                                _history.Add(resultApiMessage);
+                                MemoryManager.ShortTerm.Add("system_result", resultMsg);
+                                ContextManager.AddMessage(resultApiMessage);
+
+                                Logger.Info($"Инструмент {toolName} выполнен, результат добавлен в контекст");
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.ForegroundColor = ConsoleColor.Red;
+                                Console.WriteLine($" ❌ {ex.Message}");
+                                Console.ResetColor();
+
+                                // Добавляем ошибку как user-сообщение
+                                var errorMsg = $"[Ошибка инструмента {toolName}]: {ex.Message}";
+                                var errorApiMessage = new ApiMessage { Role = "user", Content = errorMsg };
+                                _history.Add(errorApiMessage);
+                                MemoryManager.ShortTerm.Add("system_error", errorMsg);
+                                ContextManager.AddMessage(errorApiMessage);
+                            }
+                        }
+
+                        Console.WriteLine();
+
+                        // Рекурсивно отправляем запрос с результатами инструментов
+                        return await SendWithRetryAsync(userMessage, relevantFacts, toolCallCount: toolCallCount + 1);
+                    }
+                }
 
                 return new AgentResult
                 {
@@ -570,6 +626,12 @@ public class ChatAgent
         if (!string.IsNullOrEmpty(SystemMessage))
         {
             sb.AppendLine(SystemMessage);
+        }
+
+        // 3.5. MCP-инструменты
+        if (McpRegistry is not null && McpRegistry.Tools.Count > 0)
+        {
+            sb.AppendLine(McpRegistry.GetToolsPrompt());
         }
 
         // 4. Summary из ContextManager (сжатая история диалога)
@@ -838,6 +900,8 @@ public class ChatAgent
     /// </summary>
     private void PrintSavedFacts()
     {
+        // Убрано — мешает пользователю
+        /*
         var changes = MemoryManager.LongTerm.GetRecentChanges();
         if (changes.Count == 0)
             return;
@@ -854,5 +918,6 @@ public class ChatAgent
             Console.WriteLine($"   {icon} {change.Key}: {change.Value}");
             Console.ResetColor();
         }
+        */
     }
 }

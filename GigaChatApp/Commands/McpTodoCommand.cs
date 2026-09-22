@@ -4,31 +4,31 @@ using System.Text.Json;
 namespace GigaChatApp.Commands;
 
 /// <summary>
-/// Команда для работы с GitHub через MCP.
-/// Поддерживает: /mcp connect, /mcp tools, /mcp call &lt;tool&gt; &lt;args&gt;
+/// Команда для работы с TodoMCP (Todoшница).
 /// </summary>
-public sealed class McpCommand : CommandHandler
+public sealed class McpTodoCommand : CommandHandler
 {
-    public override string Name => "mcp";
+    public override string Name => "todo";
 
-    public McpGitHubService? McpService { get; set; }
+    public McpTodoService? TodoService { get; set; }
 
     public override async Task<bool> ExecuteAsync(string[] parts, CommandContext ctx)
     {
-        if (McpService is null)
+        if (TodoService is null)
         {
-            PrintRed("❌ MCP-сервис не инициализирован. Проверьте конфигурацию appsettings.json.");
+            PrintRed("❌ TodoMCP не инициализирован. Проверьте appsettings.json.");
             Console.WriteLine();
             return true;
         }
 
         if (parts.Length < 2)
         {
-            PrintYellow("🔌 Использование MCP GitHub:");
+            PrintYellow("📋 Использование TodoMCP:");
             Console.WriteLine();
-            PrintCmd("connect", "подключиться к MCP GitHub");
-            PrintCmd("tools", "показать список инструментов");
-            PrintCmd("call <tool> <json-args>", "вызвать инструмент");
+            PrintCmd("connect", "подключиться к TodoMCP");
+            PrintCmd("tools", "список инструментов");
+            PrintCmd("call <tool> <json>", "вызвать инструмент");
+            PrintCmd("list", "список задач (list_todo_items)");
             PrintCmd("status", "статус подключения");
             Console.WriteLine();
             return true;
@@ -39,25 +39,29 @@ public sealed class McpCommand : CommandHandler
         switch (subcommand)
         {
             case "connect":
-                await HandleConnectAsync(ctx);
+                await HandleConnectAsync();
                 break;
 
             case "tools":
-                HandleTools(ctx);
+                HandleTools();
                 break;
 
             case "call":
                 if (parts.Length < 3)
                 {
-                    PrintRed("❌ Укажите инструмент: /mcp call <tool> [json-args]");
+                    PrintRed("❌ Укажите инструмент: /todo call <tool> [json-args]");
                     Console.WriteLine();
                     return true;
                 }
-                await HandleCallAsync(parts, ctx);
+                await HandleCallAsync(parts);
+                break;
+
+            case "list":
+                await HandleListAsync();
                 break;
 
             case "status":
-                HandleStatus(ctx);
+                HandleStatus();
                 break;
 
             default:
@@ -69,40 +73,39 @@ public sealed class McpCommand : CommandHandler
         return true;
     }
 
-    private async Task HandleConnectAsync(CommandContext ctx)
+    private async Task HandleConnectAsync()
     {
         try
         {
-            PrintCyan("🔌 Подключение к MCP GitHub...");
-            await McpService!.ConnectAsync();
-            PrintGreen("✅ Подключено успешно!");
+            PrintCyan("🔌 Подключение к TodoMCP...");
+            await TodoService!.ConnectAsync();
+            PrintGreen("✅ Подключено!");
             Console.WriteLine();
         }
         catch (Exception ex)
         {
-            PrintRed($"❌ Ошибка подключения: {ex.Message}");
+            PrintRed($"❌ Ошибка: {ex.Message}");
             Console.WriteLine();
         }
     }
 
-    private void HandleTools(CommandContext ctx)
+    private void HandleTools()
     {
-        if (!McpService!.IsConnected)
+        if (!TodoService!.IsConnected)
         {
-            PrintRed("❌ Не подключено. Сначала выполните /mcp connect");
+            PrintRed("❌ Не подключено. Сначала /todo connect");
             Console.WriteLine();
             return;
         }
 
-        var description = McpService.GetToolsDescription();
-        PrintCyan(description);
+        PrintCyan(TodoService.GetToolsDescription());
     }
 
-    private async Task HandleCallAsync(string[] parts, CommandContext ctx)
+    private async Task HandleCallAsync(string[] parts)
     {
-        if (!McpService!.IsConnected)
+        if (!TodoService!.IsConnected)
         {
-            PrintRed("❌ Не подключено. Сначала выполните /mcp connect");
+            PrintRed("❌ Не подключено. Сначала /todo connect");
             Console.WriteLine();
             return;
         }
@@ -110,7 +113,7 @@ public sealed class McpCommand : CommandHandler
         var toolName = parts[2];
         Dictionary<string, object?>? arguments = null;
 
-        // Аргументы опциональны: /mcp call list-commits
+        // Аргументы опциональны: /todo call get_current_user
         if (parts.Length >= 4)
         {
             var argsJson = parts[3].Trim();
@@ -121,52 +124,75 @@ public sealed class McpCommand : CommandHandler
 
             try
             {
-                arguments = JsonSerializer.Deserialize<Dictionary<string, object?>>(argsJson)
-                    ?? throw new Exception("Некорректный JSON");
+                arguments = JsonSerializer.Deserialize<Dictionary<string, object?>>(argsJson);
+                if (arguments is null) throw new Exception("Некорректный JSON");
             }
             catch (Exception ex)
             {
-                PrintRed($"❌ Ошибка парсинга аргументов: {ex.Message}");
-                Console.WriteLine("   Пример: /mcp call list-commits '{\"owner\":\"octocat\",\"repo\":\"Hello-World\"}'");
+                PrintRed($"❌ Ошибка JSON: {ex.Message}");
                 Console.WriteLine();
                 return;
             }
         }
 
-        PrintCyan($"⚡ Вызов инструмента: {toolName}");
+        PrintCyan($"⚡ {toolName}");
         if (arguments is not null && arguments.Count > 0)
-            PrintGray($"   Аргументы: {JsonSerializer.Serialize(arguments)}");
+            PrintGray($"   {JsonSerializer.Serialize(arguments)}");
         else
             PrintGray("   (без аргументов)");
         Console.WriteLine();
 
         try
         {
-            var result = await McpService!.CallToolAsync(toolName, arguments);
-            PrintGreen($"✅ Результат {toolName}:");
+            var result = await TodoService.CallToolAsync(toolName, arguments);
+            PrintGreen($"✅ {toolName}:");
             Console.WriteLine(result);
         }
         catch (Exception ex)
         {
-            PrintRed($"❌ Ошибка вызова {toolName}: {ex.Message}");
+            PrintRed($"❌ {ex.Message}");
         }
 
         Console.WriteLine();
     }
 
-    private void HandleStatus(CommandContext ctx)
+    private async Task HandleListAsync()
     {
-        var status = McpService!.IsConnected
-            ? $"✅ Подключено | Инструментов: {McpService.Tools.Count}"
+        if (!TodoService!.IsConnected)
+        {
+            PrintRed("❌ Не подключено. Сначала /todo connect");
+            Console.WriteLine();
+            return;
+        }
+
+        PrintCyan("📋 Загрузка задач...");
+        try
+        {
+            var result = await TodoService.CallToolAsync("list_todo_items", new Dictionary<string, object?>());
+            PrintGreen("✅ Задачи:");
+            Console.WriteLine(result);
+        }
+        catch (Exception ex)
+        {
+            PrintRed($"❌ {ex.Message}");
+        }
+
+        Console.WriteLine();
+    }
+
+    private void HandleStatus()
+    {
+        var status = TodoService!.IsConnected
+            ? $"✅ Подключено | Инструментов: {TodoService.Tools.Count}"
             : "❌ Не подключено";
 
-        PrintCyan($"📊 Статус MCP: {status}");
+        PrintCyan($"📊 Статус: {status}");
         Console.WriteLine();
     }
 
     private static void PrintCmd(string cmd, string desc)
     {
-        Console.Write($"   /mcp {cmd,-45}");
+        Console.Write($"   /todo {cmd,-45}");
         Console.ForegroundColor = ConsoleColor.Gray;
         Console.WriteLine($"— {desc}");
         Console.ResetColor();

@@ -52,8 +52,16 @@ public sealed class HelpCommand : CommandHandler
         PrintYellow("── MCP GitHub ──");
         PrintCmd("mcp connect", "подключиться к GitHub MCP");
         PrintCmd("mcp tools", "список инструментов");
-        PrintCmd("mcp call <tool> <json>", "вызвать инструмент");
+        PrintCmd("mcp call <tool> [json]", "вызвать инструмент (аргументы опц.)");
         PrintCmd("mcp status", "статус подключения");
+        Console.WriteLine();
+
+        PrintYellow("── MCP Todoшница ──");
+        PrintCmd("todo connect", "подключиться к TodoMCP");
+        PrintCmd("todo tools", "список инструментов");
+        PrintCmd("todo list", "список задач");
+        PrintCmd("todo call <tool> [json]", "вызвать инструмент (аргументы опц.)");
+        PrintCmd("todo status", "статус подключения");
         Console.WriteLine();
 
         PrintYellow("── Прочее ──");

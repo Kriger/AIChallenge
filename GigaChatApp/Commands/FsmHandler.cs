@@ -129,8 +129,9 @@ public static class FsmHandler
         PrintGray("⏳ Думает...");
         var result = await agent.ProcessRequestAsync(input);
 
-        var logs = agent.Logger.FlushBuffer();
-        AgentLogger.PrintBufferedMessages(logs);
+        // Убраны debug-логи — мешают пользователю
+        // var logs = agent.Logger.FlushBuffer();
+        // AgentLogger.PrintBufferedMessages(logs);
 
         if (!result.IsSuccess)
         {
