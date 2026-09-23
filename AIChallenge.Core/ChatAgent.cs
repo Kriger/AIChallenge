@@ -2,7 +2,6 @@ using AIChallenge.Core.Services;
 using AIChallenge.Services;
 using AIChallenge.Core.Infrastructure;
 using AIChallenge.Models;
-using AIChallenge.Services;
 using System.Text;
 using System.Text.Json;
 
@@ -21,6 +20,34 @@ namespace AIChallenge.Core;
 /// </summary>
 public class ChatAgent
 {
+    // --- Magic numbers as named constants ---
+    private const int MaxLogMessageLength = 80;
+    private const int MinAutoCallResponseLength = 10;
+    private const int MaxToolCallIterations = 5;
+    private const int MaxFactsToDisplay = 10;
+    private const int MaxJsonSearchDepth = 500;
+    private const int MaxJsonValueLength = 50;
+
+    /// <summary>
+    /// Печатает строку указанным цветом и сбрасывает цвет.
+    /// </summary>
+    private static void PrintColored(ConsoleColor color, string message)
+    {
+        Console.ForegroundColor = color;
+        Console.WriteLine(message);
+        Console.ResetColor();
+    }
+
+    /// <summary>
+    /// Печатает строку указанным цветом (без переноса строки).
+    /// </summary>
+    private static void PrintColoredInline(ConsoleColor color, string message)
+    {
+        Console.ForegroundColor = color;
+        Console.Write(message);
+        Console.ResetColor();
+    }
+
     private readonly ChatClient _httpClient;
     private readonly AuthClient _authClient;
     private readonly GigaChatConfig _config;
@@ -120,7 +147,7 @@ public class ChatAgent
     public async Task<AgentResult> ProcessRequestAsync(string userMessage)
     {
         Metrics.TotalRequests++;
-        Logger.Info($"Запрос: \"{userMessage[..Math.Min(userMessage.Length, 80)]}\"");
+        Logger.Info($"Запрос: \"{userMessage[..Math.Min(userMessage.Length, MaxLogMessageLength)]}\"");
 
         // 1. Проверяем кэш
         var cachedAnswer = Cache.TryGet(userMessage);
@@ -213,7 +240,7 @@ public class ChatAgent
             Logger.Info("Запущено извлечение фактов из диалога...");
             // Передаём полный диалог, а не только последние 2 сообщения
             var dialogue = MemoryManager.ShortTerm.GetAll();
-            ExtractFactsFromDialogue(userMessage, result.Answer, dialogue);
+            _ = ExtractFactsFromDialogue(userMessage, result.Answer, dialogue);
         }
 
         // 6. Сохраняем в кэш и историю
@@ -248,9 +275,6 @@ public class ChatAgent
         // 8. Адаптация на основе метрик
         Adaptive.Adapt();
 
-        // 9. Выводим сохранённые факты
-        PrintSavedFacts();
-
         return result;
     }
 
@@ -260,9 +284,7 @@ public class ChatAgent
     private async Task<AgentResult> ExecuteWithPlanningAsync(string userMessage, List<Fact> relevantFacts, List<string>? invariants)
     {
         Console.WriteLine();
-        Console.ForegroundColor = ConsoleColor.Yellow;
-        Console.WriteLine("📋 Создаю план выполнения...");
-        Console.ResetColor();
+        PrintColored(ConsoleColor.Yellow, "📋 Создаю план выполнения...");
 
         // Создаём план
         var plan = await Planner.CreatePlanAsync(userMessage, relevantFacts, invariants);
@@ -307,9 +329,7 @@ public class ChatAgent
 
         // Показываем план пользователю
         Console.WriteLine();
-        Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.WriteLine("📋 План выполнения:");
-        Console.ResetColor();
+        PrintColored(ConsoleColor.Cyan, "📋 План выполнения:");
         foreach (var task in plan.Tasks)
         {
             Console.WriteLine($"   {task.Id}. {task.Description}");
@@ -317,9 +337,7 @@ public class ChatAgent
         Console.WriteLine();
 
         // Выполняем план
-        Console.ForegroundColor = ConsoleColor.Gray;
-        Console.Write("⏳ Выполняю подзадачи...");
-        Console.ResetColor();
+        PrintColoredInline(ConsoleColor.Gray, "⏳ Выполняю подзадачи...");
 
         plan = await Planner.ExecutePlanAsync(plan, relevantFacts);
 
@@ -337,9 +355,7 @@ public class ChatAgent
 
         // Показываем статус подзадач
         Console.WriteLine();
-        Console.ForegroundColor = ConsoleColor.Yellow;
-        Console.WriteLine("📊 Статус подзадач:");
-        Console.ResetColor();
+        PrintColored(ConsoleColor.Yellow, "📊 Статус подзадач:");
         foreach (var task in plan.Tasks)
         {
             var statusIcon = task.Status switch
@@ -359,9 +375,6 @@ public class ChatAgent
         Console.WriteLine();
         Console.WriteLine($"   Общая длительность: {plan.TotalDuration.TotalMilliseconds:F0} мс");
         Console.WriteLine();
-
-        // Выводим сохранённые факты
-        PrintSavedFacts();
 
         // Возвращаем финальный ответ
         return new AgentResult
@@ -454,12 +467,10 @@ public class ChatAgent
                 if (toolCalls.Count == 0 && McpRegistry is not null && McpRegistry.Tools.Count > 0)
                 {
                     var contentTrimmed = apiResponse.Content?.Trim();
-                    if (string.IsNullOrWhiteSpace(contentTrimmed) || contentTrimmed.Length < 10)
+                    if (string.IsNullOrWhiteSpace(contentTrimmed) || contentTrimmed.Length < MinAutoCallResponseLength)
                     {
                         Console.WriteLine();
-                        Console.ForegroundColor = ConsoleColor.Yellow;
-                        Console.WriteLine("⚠️ LLM не вернул содержательный ответ, пытаюсь авто-вызов MCP...");
-                        Console.ResetColor();
+                        PrintColored(ConsoleColor.Yellow, "⚠️ LLM не вернул содержательный ответ, пытаюсь авто-вызов MCP...");
                         
                         // Извлекаем контекст из сообщения пользователя для авто-вызова
                         var autoArgs = ExtractAutoCallArgs(userMessage);
@@ -483,9 +494,7 @@ public class ChatAgent
                             try
                             {
                                 var result = await McpRegistry.ExecuteToolCall(listTool.Name, argsJson);
-                                Console.ForegroundColor = ConsoleColor.Green;
-                                Console.WriteLine(" ✅");
-                                Console.ResetColor();
+                                PrintColored(ConsoleColor.Green, " ✅");
                                 
                                 // Форматируем результат как чёткий блок данных — LLM обязан его использовать
                                 var formattedResult = $"""
@@ -514,26 +523,20 @@ public class ChatAgent
                     }
                 }
                 
-                if (toolCalls.Count > 0 && toolCallCount < 5) // Лимит 5 итераций
+                if (toolCalls.Count > 0 && toolCallCount < MaxToolCallIterations) // Лимит итераций
                 {
                     Console.WriteLine();
-                    Console.ForegroundColor = ConsoleColor.Yellow;
-                    Console.WriteLine($"🔧 LLM вызвал {toolCalls.Count} инструмент(ов)...");
-                    Console.ResetColor();
+                    PrintColored(ConsoleColor.Yellow, $"🔧 LLM вызвал {toolCalls.Count} инструмент(ов)...");
 
                         // Выполняем каждый инструмент
                         foreach (var (toolName, toolArgs) in toolCalls)
                         {
-                            Console.ForegroundColor = ConsoleColor.Cyan;
-                            Console.Write($"  ⚡ {toolName}");
-                            Console.ResetColor();
+                            PrintColoredInline(ConsoleColor.Cyan, $"  ⚡ {toolName}");
 
                             try
                             {
                                 var result = await McpRegistry.ExecuteToolCall(toolName, toolArgs);
-                                Console.ForegroundColor = ConsoleColor.Green;
-                                Console.WriteLine(" ✅");
-                                Console.ResetColor();
+                                PrintColored(ConsoleColor.Green, " ✅");
 
                                 // Форматируем результат для лучшего понимания LLM
                                 string formattedResult;
@@ -582,9 +585,7 @@ public class ChatAgent
                             }
                             catch (Exception ex)
                             {
-                                Console.ForegroundColor = ConsoleColor.Red;
-                                Console.WriteLine($" ❌ {ex.Message}");
-                                Console.ResetColor();
+                                PrintColored(ConsoleColor.Red, $" ❌ {ex.Message}");
 
                                 // Добавляем ошибку — LLM сам разберётся
                                 var errorMsg = $"[Ошибка инструмента {toolName}]: {ex.Message}";
@@ -671,6 +672,7 @@ public class ChatAgent
             "не найдена",
         };
 
+        if (string.IsNullOrEmpty(response)) return null;
         var responseLower = response.ToLowerInvariant();
         var isIgnoring = ignoringPhrases.Any(phrase => responseLower.Contains(phrase));
 
@@ -686,8 +688,8 @@ public class ChatAgent
                 continue;
 
             var content = msg.Content.Trim();
-            string extractedData = null;
-            string toolType = null;
+            string? extractedData = null;
+            string? toolType = null;
 
             // 1. Проверяем JSON-объект с полем "tool" (верификация, update)
             if (content.StartsWith("{"))
@@ -773,7 +775,7 @@ public class ChatAgent
             // 4. Проверяем JSON внутри текста (ищем { или [ в середине сообщения)
             if (extractedData == null && !content.StartsWith("{") && !content.StartsWith("["))
             {
-                for (int j = 0; j < Math.Min(content.Length, 500); j++)
+                for (int j = 0; j < Math.Min(content.Length, MaxJsonSearchDepth); j++)
                 {
                     if ((content[j] == '{' || content[j] == '[') && j + 10 < content.Length)
                     {
@@ -891,7 +893,7 @@ public class ChatAgent
         // 2. Факты из долгосрочной памяти — ПОСЛЕ профиля
         if (relevantFacts.Count > 0)
         {
-            var topFacts = relevantFacts.Take(10).ToList();
+            var topFacts = relevantFacts.Take(MaxFactsToDisplay).ToList();
 
             sb.AppendLine("=== КОНТЕКСТ ИЗ ПАМЯТИ ===");
             sb.AppendLine("Ниже — ключевая информация из предыдущих обсуждений.");
@@ -946,7 +948,7 @@ public class ChatAgent
     /// Извлекает новые факты из диалога и сохраняет в память.
     /// Использует LLM для анализа.
     /// </summary>
-    private async void ExtractFactsFromDialogue(string userMessage, string assistantAnswer, IReadOnlyList<MemoryEntry>? dialogue = null)
+    private async Task ExtractFactsFromDialogue(string userMessage, string assistantAnswer, IReadOnlyList<MemoryEntry>? dialogue = null)
     {
         try
         {
@@ -1042,9 +1044,9 @@ public class ChatAgent
         using var httpClient = new HttpClient();
         httpClient.DefaultRequestHeaders.Authorization =
             new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
-        httpClient.BaseAddress = new Uri("https://api.giga.chat");
+        httpClient.BaseAddress = new Uri(ApiEndpoints.BaseAddress);
 
-        var response = await httpClient.PostAsJsonAsync("/v1/chat/completions", extractionRequest);
+        var response = await httpClient.PostAsJsonAsync(ApiEndpoints.ChatCompletionsEndpoint, extractionRequest);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -1455,29 +1457,6 @@ public class ChatAgent
     /// <summary>
     /// Нормализует название поля (без проверки дубликатов).
     /// </summary>
-    private static string NormalizeFieldName(string name)
-    {
-        var lower = name.ToLowerInvariant();
-        return lower switch
-        {
-            "id" or "ид" or "id_задачи" => "ID",
-            "title" or "название" or "name" => "Название",
-            "description" or "описание" => "Описание",
-            "iscompleted" or "статусвыполнения" or "выполнена" => "Статус выполнения",
-            "priority" or "приоритет" => "Приоритет",
-            "deadline" or "сроквыполнения" => "Срок выполнения",
-            "projectid" or "project_id" => "ID проекта",
-            "projecttitle" or "projectname" or "проект" => "Проект",
-            "projectcolor" or "цветпроекта" => "Цвет проекта",
-            "color" or "цвет" => "Цвет",
-            "tag" or "тег" => "Тег",
-            "datecompleted" or "датавыполнения" => "Дата выполнения",
-            "createdat" or "датаСоздания" => "Дата создания",
-            "срок" => "Срок",
-            _ => name
-        };
-    }
-
     /// <summary>
     /// Извлекает значение свойства как строку (поддерживает string, int, bool и другие типы).
     /// Поля ищутся независимо от регистра.
@@ -1531,10 +1510,10 @@ public class ChatAgent
                       prop.Value.ValueKind == JsonValueKind.Number ? prop.Value.GetInt32().ToString() :
                       prop.Value.ValueKind == JsonValueKind.Null ? "—" :
                       prop.Value.ToString();
-            if (val.Length > 50) val = val[..50] + "...";
+            if (val.Length > MaxJsonValueLength) val = val[..MaxJsonValueLength] + "...";
             pairs.Add($"{prop.Name}={val}");
         }
-        return null;
+        return string.Join(", ", pairs);
     }
     
     /// <summary>
@@ -1665,29 +1644,6 @@ public class ChatAgent
     /// <summary>
     /// Выводит сохранённые факты из последнего действия.
     /// </summary>
-    private void PrintSavedFacts()
-    {
-        // Убрано — мешает пользователю
-        /*
-        var changes = MemoryManager.LongTerm.GetRecentChanges();
-        if (changes.Count == 0)
-            return;
-
-        Console.WriteLine();
-        Console.ForegroundColor = ConsoleColor.Magenta;
-        Console.WriteLine("🧠 Сохранённые факты:");
-        Console.ResetColor();
-
-        foreach (var change in changes)
-        {
-            var icon = change.WasNew ? "✨" : "🔄";
-            Console.ForegroundColor = change.WasNew ? ConsoleColor.Green : ConsoleColor.Yellow;
-            Console.WriteLine($"   {icon} {change.Key}: {change.Value}");
-            Console.ResetColor();
-        }
-        */
-    }
-
     /// <summary>
     /// Извлекает int значение свойства независимо от регистра.
     /// </summary>
@@ -1710,29 +1666,4 @@ public class ChatAgent
         return null;
     }
 
-    /// <summary>
-    /// Возвращает список возможных имён поля в JSON-ответе MCP-сервера.
-    /// Например: "Цвет" → ["Color", "color", "Цвет", "цвет"]
-    /// </summary>
-    private static string[] GetFieldCandidates(string fieldName)
-    {
-        var lower = fieldName.ToLowerInvariant();
-        return lower switch
-        {
-            "цвет" => ["Color", "color", "Цвет", "цвет", "ProjectColor", "projectColor"],
-            "приоритет" => ["Priority", "priority", "Приоритет", "приоритет"],
-            "название" => ["Title", "title", "Название", "название", "Name", "name"],
-            "описание" => ["Description", "description", "Описание", "описание"],
-            "статусвыполнения" => ["IsCompleted", "isCompleted", "СтатусВыполнения", "статусВыполнения"],
-            "iscompleted" => ["IsCompleted", "isCompleted"],
-            "выполнена" => ["IsCompleted", "isCompleted"],
-            "сроквыполнения" => ["Deadline", "deadline", "DueDate", "dueDate", "СрокВыполнения", "срокВыполнения"],
-            "тег" => ["Tag", "tag", "Тег", "тег"],
-            "проект" => ["ProjectTitle", "projectTitle", "Project", "project", "Проект", "проект"],
-            "idпроекта" => ["ProjectId", "projectId", "project_id", "Project_ID", "projectID"],
-            "датавыполнения" => ["DateCompleted", "dateCompleted", "CompletedAt", "completedAt"],
-            "датаСоздания" => ["CreatedAt", "createdAt", "ДатаСоздания", "датаСоздания"],
-            _ => [fieldName, fieldName.ToLowerInvariant(), fieldName.ToUpperInvariant()]
-        };
-    }
 }

@@ -1,6 +1,5 @@
 using AIChallenge.Core.Infrastructure;
 using AIChallenge.Services;
-using AIChallenge.Core.Infrastructure;
 using AIChallenge.Models;
 
 namespace AIChallenge.Core.Services;
@@ -199,9 +198,9 @@ public class Planner
             {
                 client.DefaultRequestHeaders.Authorization =
                     new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
-                client.BaseAddress = new Uri("https://api.giga.chat");
+                client.BaseAddress = new Uri(ApiEndpoints.BaseAddress);
 
-                var response = await client.PostAsJsonAsync("/v1/chat/completions", requestObj);
+                var response = await client.PostAsJsonAsync(ApiEndpoints.ChatCompletionsEndpoint, requestObj);
 
                 if (!response.IsSuccessStatusCode)
                     return null;
@@ -318,9 +317,9 @@ public class Planner
         var client = new HttpClient();
         client.DefaultRequestHeaders.Authorization =
             new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
-        client.BaseAddress = new Uri("https://api.giga.chat");
+        client.BaseAddress = new Uri(ApiEndpoints.BaseAddress);
 
-        var response = await client.PostAsJsonAsync("/v1/chat/completions", requestObj);
+        var response = await client.PostAsJsonAsync(ApiEndpoints.ChatCompletionsEndpoint, requestObj);
         client.Dispose();
 
         if (!response.IsSuccessStatusCode)
@@ -403,9 +402,9 @@ public class Planner
         var client = new HttpClient();
         client.DefaultRequestHeaders.Authorization =
             new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
-        client.BaseAddress = new Uri("https://api.giga.chat");
+        client.BaseAddress = new Uri(ApiEndpoints.BaseAddress);
 
-        var response = await client.PostAsJsonAsync("/v1/chat/completions", requestObj);
+        var response = await client.PostAsJsonAsync(ApiEndpoints.ChatCompletionsEndpoint, requestObj);
         client.Dispose();
 
         if (!response.IsSuccessStatusCode)

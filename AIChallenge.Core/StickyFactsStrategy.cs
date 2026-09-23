@@ -128,11 +128,11 @@ public class StickyFactsStrategy : IContextStrategy, IFactStorage
         var httpClient = new HttpClient();
         httpClient.DefaultRequestHeaders.Authorization =
             new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
-        httpClient.BaseAddress = new Uri("https://api.giga.chat");
+        httpClient.BaseAddress = new Uri(ApiEndpoints.BaseAddress);
 
         try
         {
-            var response = httpClient.PostAsJsonAsync("/v1/chat/completions", requestObj).GetAwaiter().GetResult();
+            var response = httpClient.PostAsJsonAsync(ApiEndpoints.ChatCompletionsEndpoint, requestObj).GetAwaiter().GetResult();
 
             if (response.IsSuccessStatusCode)
             {
@@ -187,9 +187,9 @@ public class StickyFactsStrategy : IContextStrategy, IFactStorage
             var httpClient = new HttpClient();
             httpClient.DefaultRequestHeaders.Authorization =
                 new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
-            httpClient.BaseAddress = new Uri("https://api.giga.chat");
+            httpClient.BaseAddress = new Uri(ApiEndpoints.BaseAddress);
 
-            var response = await httpClient.PostAsJsonAsync("/v1/chat/completions", requestObj);
+            var response = await httpClient.PostAsJsonAsync(ApiEndpoints.ChatCompletionsEndpoint, requestObj);
             httpClient.Dispose();
 
             if (response.IsSuccessStatusCode)

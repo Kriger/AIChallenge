@@ -2,7 +2,6 @@ using AIChallenge.Core;
 using AIChallenge.Core.Services;
 using AIChallenge.Models;
 using AIChallenge.Core.Infrastructure;
-using AIChallenge.Core.Services;
 
 namespace AIChallenge.Cli.Commands;
 

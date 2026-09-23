@@ -1,5 +1,4 @@
 using AIChallenge.Core;
-using AIChallenge.Core;
 using AIChallenge.Models;
 using AIChallenge.Core.Infrastructure;
 

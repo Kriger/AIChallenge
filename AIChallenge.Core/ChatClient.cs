@@ -92,7 +92,7 @@ public class ChatClient
 
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
 
-        var response = await _httpClient.PostAsJsonAsync("/v1/chat/completions", requestBody);
+        var response = await _httpClient.PostAsJsonAsync(ApiEndpoints.ChatCompletionsEndpoint, requestBody);
 
         stopwatch.Stop();
 

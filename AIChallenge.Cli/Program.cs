@@ -69,7 +69,7 @@ var handler = new HttpClientHandler
 
 using var httpClient = new HttpClient(handler)
 {
-    BaseAddress = new Uri("https://api.giga.chat"),
+    BaseAddress = new Uri(ApiEndpoints.BaseAddress),
     Timeout = TimeSpan.FromMinutes(5),
 };
 
