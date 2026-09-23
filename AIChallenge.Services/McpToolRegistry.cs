@@ -53,7 +53,7 @@ public sealed class McpToolRegistry : IAsyncDisposable
         if (tool is null)
             throw new InvalidOperationException($"Инструмент '{name}' не найден. Доступные: {string.Join(", ", _tools.Select(t => t.Name))}");
 
-        return await tool.Call(args);
+        return await tool.Call!(args!);
     }
 
     /// <summary>

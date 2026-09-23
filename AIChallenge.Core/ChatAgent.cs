@@ -535,7 +535,7 @@ public class ChatAgent
 
                             try
                             {
-                                var result = await McpRegistry.ExecuteToolCall(toolName, toolArgs);
+                                var result = await McpRegistry!.ExecuteToolCall(toolName, toolArgs!);
                                 PrintColored(ConsoleColor.Green, " ✅");
 
                                 // Форматируем результат для лучшего понимания LLM
@@ -603,7 +603,7 @@ public class ChatAgent
                 }
 
                 // === ПОСТ-ОБРАБОТКА: если LLM игнорирует данные инструмента ===
-                var answer = apiResponse.Content;
+                var answer = apiResponse.Content ?? string.Empty;
                 if (McpRegistry is not null && McpRegistry.Tools.Count > 0)
                 {
                     var ignoredAnswer = TryFixIgnoredToolResponse(answer);

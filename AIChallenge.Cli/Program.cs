@@ -26,7 +26,8 @@ configuration.GetSection("GigaChat").Bind(config);
 // Load ContextConfig manually (Binder not available in Models project)
 var ctxOptions = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
 var ctxSection = configuration.GetSection("Context");
-config.Context = JsonSerializer.Deserialize<ContextConfig>(ctxSection.Value!, ctxOptions) ?? new ContextConfig();
+var ctxValue = ctxSection.Value ?? "{}";
+config.Context = JsonSerializer.Deserialize<ContextConfig>(ctxValue, ctxOptions) ?? new ContextConfig();
 config.Context.SlidingWindow = ctxSection.GetSection("SlidingWindow").Get<SlidingWindowConfig>() ?? new SlidingWindowConfig();
 config.Context.StickyFacts = ctxSection.GetSection("StickyFacts").Get<StickyFactsConfig>() ?? new StickyFactsConfig();
 config.Context.Branching = ctxSection.GetSection("Branching").Get<BranchingConfig>() ?? new BranchingConfig();
