@@ -1,0 +1,17 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\AIChallenge.Models\AIChallenge.Models.csproj" />
+    <ProjectReference Include="..\AIChallenge.Services\AIChallenge.Services.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Using Include="System.Net.Http.Json" />
+    <Using Include="System.Text" />
+    <Using Include="System.Text.Json.Serialization" />
+    <Using Include="System.Linq" />
+  </ItemGroup>
+</Project>
