@@ -111,7 +111,7 @@ public sealed class McpTodoCommand : CommandHandler
         }
 
         var toolName = parts[2];
-        Dictionary<string, object?>? arguments = null;
+        JsonElement? arguments = null;
 
         // Аргументы опциональны: /todo call get_current_user
         if (parts.Length >= 4)
@@ -124,8 +124,8 @@ public sealed class McpTodoCommand : CommandHandler
 
             try
             {
-                arguments = JsonSerializer.Deserialize<Dictionary<string, object?>>(argsJson);
-                if (arguments is null) throw new Exception("Некорректный JSON");
+                var doc = JsonDocument.Parse(argsJson);
+                arguments = doc.RootElement;
             }
             catch (Exception ex)
             {
@@ -136,15 +136,18 @@ public sealed class McpTodoCommand : CommandHandler
         }
 
         PrintCyan($"⚡ {toolName}");
-        if (arguments is not null && arguments.Count > 0)
-            PrintGray($"   {JsonSerializer.Serialize(arguments)}");
+        if (arguments is not null)
+            PrintGray($"   {arguments.Value.GetRawText()}");
         else
             PrintGray("   (без аргументов)");
         Console.WriteLine();
 
         try
         {
-            var result = await TodoService.CallToolAsync(toolName, arguments);
+            var dict = arguments.HasValue
+                ? JsonSerializer.Deserialize<Dictionary<string, object?>>(arguments.Value.GetRawText())
+                : null;
+            var result = await TodoService.CallToolAsync(toolName, dict);
             PrintGreen($"✅ {toolName}:");
             Console.WriteLine(result);
         }
@@ -168,7 +171,7 @@ public sealed class McpTodoCommand : CommandHandler
         PrintCyan("📋 Загрузка задач...");
         try
         {
-            var result = await TodoService.CallToolAsync("list_todo_items", new Dictionary<string, object?>());
+            var result = await TodoService.CallToolAsync("list_todo_items", null);
             PrintGreen("✅ Задачи:");
             Console.WriteLine(result);
         }

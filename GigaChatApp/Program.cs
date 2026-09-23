@@ -296,6 +296,7 @@ try
                             Name: tool.Name,
                             Description: tool.Description,
                             ServiceName: "todo",
+                            InputSchema: tool.InputSchema,
                             Call: async (args) =>
                             {
                                 var dict = string.IsNullOrWhiteSpace(args)
@@ -422,13 +423,15 @@ while (true)
     }
 
     // === Автоматический запуск FSM при ключевых словах ===
+    // FSM НЕ запускается, если доступны MCP-инструменты — пользователь может хотеть
+    // создать/обновить задачу через MCP, а не запустить FSM-сбор требований
     var lowerInput = input.ToLowerInvariant();
     var isFsmTrigger = FsmKeywords.All.Any(kw => lowerInput.StartsWith(kw + " ") || lowerInput.StartsWith(kw + "，") || lowerInput == kw);
 
     var reqStatus = taskStateMachine.GetRequirementsStatus();
     var shouldHandleFsm = taskStateMachine.RequirementsContext is not null && reqStatus is not null && !reqStatus.IsComplete;
 
-    if (shouldHandleFsm || isFsmTrigger)
+    if (shouldHandleFsm || (isFsmTrigger && agent.McpRegistry is null))
     {
         await FsmHandler.HandleFsmInputAsync(input, taskStateMachine, config);
         continue;

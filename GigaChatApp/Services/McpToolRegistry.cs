@@ -19,7 +19,8 @@ public sealed class McpToolRegistry : IAsyncDisposable
         string Name,
         string Description,
         string? ServiceName,
-        Func<string, Task<string>> Call);
+        string? InputSchema = null,
+        Func<string, Task<string>>? Call = null);
 
     public IReadOnlyList<McpToolDefinition> Tools => _tools;
 
@@ -81,6 +82,46 @@ public sealed class McpToolRegistry : IAsyncDisposable
         foreach (var tool in _tools)
         {
             sb.AppendLine($"  • **{tool.Name}** — {tool.Description}");
+            if (!string.IsNullOrWhiteSpace(tool.InputSchema))
+            {
+                try
+                {
+                    var schemaTrimmed = tool.InputSchema.Trim();
+                    if (schemaTrimmed.Length > 2 && schemaTrimmed != "{}")
+                    {
+                        using var doc = System.Text.Json.JsonDocument.Parse(schemaTrimmed);
+                        var root = doc.RootElement;
+                        if (root.TryGetProperty("properties", out var props) && props.ValueKind == System.Text.Json.JsonValueKind.Object)
+                        {
+                            var requiredParams = new List<string>();
+                            if (root.TryGetProperty("required", out var req) && req.ValueKind == System.Text.Json.JsonValueKind.Array)
+                            {
+                                requiredParams = req.EnumerateArray()
+                                    .Select(r => r.GetString() ?? "")
+                                    .Where(r => !string.IsNullOrEmpty(r))
+                                    .ToList();
+                            }
+
+                            var paramList = new List<string>();
+                            foreach (var prop in props.EnumerateObject())
+                            {
+                                var desc = prop.Value.TryGetProperty("type", out var typeProp) ? typeProp.GetString() ?? "" : "";
+                                var reqLabel = requiredParams.Contains(prop.Name) ? " (обязательный)" : "";
+                                paramList.Add($"    - `{prop.Name}` ({desc}){reqLabel}");
+                            }
+                            if (paramList.Count > 0)
+                            {
+                                sb.AppendLine($"    Параметры:");
+                                sb.AppendLine(string.Join("\n", paramList));
+                            }
+                        }
+                    }
+                }
+                catch
+                {
+                    // игнорируем невалидные схемы
+                }
+            }
         }
 
         sb.AppendLine();

@@ -191,6 +191,178 @@ public sealed class McpTodoService : IAsyncDisposable
         if (!_connected)
             throw new InvalidOperationException("MCP не подключён");
 
+        // Не нормализуем аргументы здесь — это делает McpToolRegistry.ExecuteToolCall
+        var args = arguments ?? new Dictionary<string, object?>();
+
+        // Нормализуем аргументы для update_todo_item — переводим русские значения в английские
+        if (toolName.Equals("update_todo_item", StringComparison.OrdinalIgnoreCase) && args is not null)
+        {
+            var argsNormalized = args.Keys.ToDictionary(k => k.ToLowerInvariant(), v => args[v]);
+
+            // priority: русский → английский
+            if (argsNormalized.TryGetValue("priority", out var rawPriority))
+            {
+                var priorityStr = NormalizeToString(rawPriority);
+                if (!string.IsNullOrEmpty(priorityStr))
+                {
+                    var normalizedPriority = priorityStr.ToLowerInvariant() switch
+                    {
+                        "низкий" or "low" => "Low",
+                        "базовый" or "basic" => "Basic",
+                        "высокий" or "high" => "High",
+                        "очень высокий" or "оченьвысокий" or "veryhigh" or "very high" => "VeryHigh",
+                        "критический" or "критичный" or "critical" or "urgent" => "Critical",
+                        _ => priorityStr
+                    };
+                    args = new Dictionary<string, object?>(args)
+                    {
+                        ["priority"] = normalizedPriority
+                    };
+                }
+            }
+
+            // isCompleted: русский → boolean
+            if (argsNormalized.TryGetValue("iscompleted", out var rawCompleted))
+            {
+                var completedStr = NormalizeToString(rawCompleted);
+                if (completedStr != null)
+                {
+                    bool newIsCompleted = completedStr.ToLowerInvariant() switch
+                    {
+                        "true" or "1" or "да" or "выполнена" or "выполнено" or "yes" or "completed" => true,
+                        "false" or "0" or "нет" or "невыполнена" or "невыполнено" or "no" or "incomplete" => false,
+                        _ => false
+                    };
+                    args = new Dictionary<string, object?>(args)
+                    {
+                        ["isCompleted"] = newIsCompleted
+                    };
+                }
+            }
+        }
+
+        // Для get_project: если передано название проекта но не передан id — разрешаем id по списку проектов
+        if (toolName.Equals("get_project", StringComparison.OrdinalIgnoreCase) && args is not null)
+        {
+            var argsNormalized = args.Keys.ToDictionary(k => k.ToLowerInvariant(), v => args[v]);
+            bool hasId = argsNormalized.ContainsKey("id");
+            bool hasTitle = argsNormalized.ContainsKey("title") || argsNormalized.ContainsKey("название") || argsNormalized.ContainsKey("title_ru");
+
+            if (!hasId && hasTitle)
+            {
+                string? titleValue = null;
+                if (argsNormalized.TryGetValue("title", out var t1)) titleValue = NormalizeToString(t1);
+                else if (argsNormalized.TryGetValue("название", out var t2)) titleValue = NormalizeToString(t2);
+                else if (argsNormalized.TryGetValue("title_ru", out var t3)) titleValue = NormalizeToString(t3);
+
+                if (!string.IsNullOrEmpty(titleValue))
+                {
+                    Log($"🔍 get_project: id не указан, ищем проект по названию '{titleValue}'", LogLevel.Info);
+                    var listResult = await CallToolAsync("list_projects", null);
+                    try
+                    {
+                        using var doc = JsonDocument.Parse(listResult);
+                        var root = doc.RootElement;
+                        if (root.ValueKind == JsonValueKind.Array)
+                        {
+                            int? foundId = null;
+                            foreach (var item in root.EnumerateArray())
+                            {
+                                var itemTitle = TryGetPropertyAsString(item, "Title", "title", "Название", "name", "Subject", "subject");
+                                if (!string.IsNullOrEmpty(itemTitle) && itemTitle.Equals(titleValue, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    var idStr = TryGetPropertyAsString(item, "Id", "id", "ID", "ProjectId", "projectid");
+                                    if (int.TryParse(idStr, out var parsedId))
+                                    {
+                                        foundId = parsedId;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (foundId.HasValue)
+                            {
+                                Log($"✅ Найден проект: ID={foundId.Value}", LogLevel.Info);
+                                args = new Dictionary<string, object?>(args)
+                                {
+                                    ["id"] = foundId.Value
+                                };
+                            }
+                            else
+                            {
+                                Log($"❌ Проект с названием '{titleValue}' не найден", LogLevel.Warning);
+                                return $"Проект с названием '{titleValue}' не найден. Используйте /todo call list_projects для просмотра всех проектов.";
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Log($"⚠️ Не удалось разрешить ID проекта по названию: {ex.Message}", LogLevel.Warning);
+                    }
+                }
+            }
+        }
+
+        // Для get_todo_item: если передан title но не передан id — разрешаем id по списку задач
+        if (toolName.Equals("get_todo_item", StringComparison.OrdinalIgnoreCase) && args is not null)
+        {
+            var argsNormalized = args.Keys.ToDictionary(k => k.ToLowerInvariant(), v => args[v]);
+            bool hasId = argsNormalized.ContainsKey("id") || argsNormalized.ContainsKey("taskid") || argsNormalized.ContainsKey("задачаid");
+            bool hasTitle = argsNormalized.ContainsKey("title") || argsNormalized.ContainsKey("название") || argsNormalized.ContainsKey("title_ru");
+
+            if (!hasId && hasTitle)
+            {
+                string? titleValue = null;
+                if (argsNormalized.TryGetValue("title", out var t1)) titleValue = NormalizeToString(t1);
+                else if (argsNormalized.TryGetValue("название", out var t2)) titleValue = NormalizeToString(t2);
+                else if (argsNormalized.TryGetValue("title_ru", out var t3)) titleValue = NormalizeToString(t3);
+
+                if (!string.IsNullOrEmpty(titleValue))
+                {
+                    Log($"🔍 get_todo_item: id не указан, ищем задачу по названию '{titleValue}'", LogLevel.Info);
+                    var listResult = await CallToolAsync("list_todo_items", null);
+                    try
+                    {
+                        using var doc = JsonDocument.Parse(listResult);
+                        var root = doc.RootElement;
+                        if (root.ValueKind == JsonValueKind.Array)
+                        {
+                            int? foundId = null;
+                            foreach (var item in root.EnumerateArray())
+                            {
+                                var itemTitle = TryGetPropertyAsString(item, "Title", "title", "Название", "name", "Subject", "subject");
+                                if (!string.IsNullOrEmpty(itemTitle) && itemTitle.Equals(titleValue, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    var idStr = TryGetPropertyAsString(item, "Id", "id", "ID", "TaskId", "taskid");
+                                    if (int.TryParse(idStr, out var parsedId))
+                                    {
+                                        foundId = parsedId;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (foundId.HasValue)
+                            {
+                                Log($"✅ Найдена задача: ID={foundId.Value}", LogLevel.Info);
+                                args = new Dictionary<string, object?>(args)
+                                {
+                                    ["id"] = foundId.Value
+                                };
+                            }
+                            else
+                            {
+                                Log($"❌ Задача с названием '{titleValue}' не найдена", LogLevel.Warning);
+                                return $"Задача с названием '{titleValue}' не найдена. Используйте /todo list для просмотра всех задач.";
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Log($"⚠️ Не удалось разрешить ID по названию: {ex.Message}", LogLevel.Warning);
+                    }
+                }
+            }
+        }
+        
         var payload = new
         {
             jsonrpc = "2.0",
@@ -199,11 +371,26 @@ public sealed class McpTodoService : IAsyncDisposable
             @params = new
             {
                 name = toolName,
-                arguments = arguments ?? new Dictionary<string, object?>()
+                arguments = args
             }
         };
 
-        var payloadRaw = JsonSerializer.Serialize(payload);
+        var payloadRaw = JsonSerializer.Serialize(payload, new JsonSerializerOptions
+        {
+            Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+        });
+
+        // Валидируем payload перед отправкой
+        try
+        {
+            JsonDocument.Parse(payloadRaw);
+        }
+        catch (Exception ex)
+        {
+            Log($"❌ Невалидный JSON-RPC payload: {ex.Message}", LogLevel.Error);
+            Log($"   Payload: {payloadRaw}", LogLevel.Error);
+            throw new Exception($"Invalid payload: {ex.Message}");
+        }
 
         var response = await _http.PostAsync("/mcp", new StringContent(payloadRaw, System.Text.Encoding.UTF8, "application/json"));
         if (!response.IsSuccessStatusCode)
@@ -213,8 +400,9 @@ public sealed class McpTodoService : IAsyncDisposable
             throw new Exception($"Call failed: {response.StatusCode}");
         }
 
-        var raw = await response.Content.ReadAsStringAsync();
-        var json = ExtractJson(raw);
+        var responseRaw = await response.Content.ReadAsStringAsync();
+        
+        var json = ExtractJson(responseRaw);
         var result = JsonSerializer.Deserialize<JsonElement?>(json);
         if (result is null)
             return "(пустой результат)";
@@ -238,8 +426,173 @@ public sealed class McpTodoService : IAsyncDisposable
                 .Select(c => c.GetProperty("text").GetString() ?? "")
                 .ToList();
 
+            var rawText = string.Join("\n", texts);
+
+            // Клиентская фильтрация по проекту — сервер игнорирует projectTitle
+            if (toolName.Equals("list_todo_items", StringComparison.OrdinalIgnoreCase) && arguments is not null)
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(rawText);
+                    var root = doc.RootElement;
+                    if (root.ValueKind == JsonValueKind.Array)
+                    {
+                        // Нормализуем ключи аргументов к нижнему регистру
+                        var argsNormalized = arguments.Keys.ToDictionary(
+                            k => k.ToLowerInvariant(), 
+                            v => arguments[v]);
+
+                        string? filterProject = null;
+                        if (argsNormalized.TryGetValue("projecttitle", out var pt) || 
+                            argsNormalized.TryGetValue("project", out pt) ||
+                            argsNormalized.TryGetValue("названиепроекта", out pt) ||
+                            argsNormalized.TryGetValue("проект", out pt))
+                        {
+                            filterProject = NormalizeToString(pt);
+                        }
+                        else if (argsNormalized.TryGetValue("filter_by_project", out var fb))
+                        {
+                            var fbStr = NormalizeToString(fb);
+                            if (fbStr != null)
+                            {
+                                if (fbStr.Equals("false", StringComparison.OrdinalIgnoreCase) || fbStr.Equals("нет", StringComparison.OrdinalIgnoreCase))
+                                    filterProject = ""; // false → задачи без проекта
+                                else
+                                    filterProject = fbStr;
+                            }
+                        }
+
+                        if (!string.IsNullOrEmpty(filterProject))
+                        {
+                            var filtered = new List<JsonElement>();
+                            foreach (var item in root.EnumerateArray())
+                            {
+                                var projId = TryGetPropertyAsString(item, "ProjectTitle", "projectTitle", "Project", "project", "Проект", "проект", "НазваниеПроекта", "name");
+                                if (string.Equals(projId, filterProject, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    filtered.Add(item.Clone());
+                                }
+                            }
+                            if (filtered.Count > 0)
+                            {
+                                var options = new JsonSerializerOptions 
+                                { 
+                                    WriteIndented = true,
+                                    Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping 
+                                };
+                                rawText = JsonSerializer.Serialize(filtered, options);
+                            }
+                        }
+                        else if (filterProject != null)
+                        {
+                            // filterProject is empty — show tasks WITHOUT a project
+                            var filtered = new List<JsonElement>();
+                            foreach (var item in root.EnumerateArray())
+                            {
+                                var projId = TryGetPropertyAsString(item, "ProjectTitle", "projectTitle", "Project", "project", "Проект", "проект", "НазваниеПроекта", "name");
+                                if (string.IsNullOrEmpty(projId) || 
+                                    projId.Equals("нет", StringComparison.OrdinalIgnoreCase) ||
+                                    projId.Equals("none", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    filtered.Add(item.Clone());
+                                }
+                            }
+                            if (filtered.Count > 0)
+                            {
+                                var options = new JsonSerializerOptions 
+                                { 
+                                    WriteIndented = true,
+                                    Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping 
+                                };
+                                rawText = JsonSerializer.Serialize(filtered, options);
+                            }
+                        }
+                    }
+                }
+                catch { /* не фильтруем */ }
+            }
+            
+            // Клиентская фильтрация по isCompleted — сервер может игнорировать
+            if (toolName.Equals("list_todo_items", StringComparison.OrdinalIgnoreCase) && arguments is not null)
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(rawText);
+                    var root = doc.RootElement;
+                    if (root.ValueKind == JsonValueKind.Array)
+                    {
+                        // Нормализуем ключи аргументов к нижнему регистру
+                        var argsNormalized = arguments.Keys.ToDictionary(
+                            k => k.ToLowerInvariant(), 
+                            v => arguments[v]);
+
+                        bool filterByCompleted = false;
+                        bool? shouldFilter = null;
+                        
+                        if (argsNormalized.TryGetValue("iscompleted", out var ic))
+                        {
+                            var icStr = NormalizeToString(ic);
+                            if (icStr != null)
+                            {
+                                filterByCompleted = icStr.Equals("true", StringComparison.OrdinalIgnoreCase) || 
+                                                    icStr.Equals("да", StringComparison.OrdinalIgnoreCase);
+                                shouldFilter = true;
+                            }
+                        }
+                        else if (argsNormalized.TryGetValue("description", out var desc))
+                        {
+                            var descStr = NormalizeToString(desc);
+                            if (descStr != null)
+                            {
+                                var descText = descStr.ToLowerInvariant();
+                                if (descText.Contains("выполнен"))
+                                {
+                                    filterByCompleted = true;
+                                    shouldFilter = true;
+                                }
+                                else if (descText.Contains("невыполнен"))
+                                {
+                                    filterByCompleted = false;
+                                    shouldFilter = true;
+                                }
+                            }
+                        }
+                        
+                        if (shouldFilter == true)
+                        {
+                            var filtered = new List<JsonElement>();
+                            foreach (var item in root.EnumerateArray())
+                            {
+                                var isCompleted = TryGetPropertyAsString(item, "IsCompleted", "isCompleted", "СтатусВыполнения", "статусВыполнения", "Выполнена", "выполнена", "Status", "status");
+                                bool itemCompleted = isCompleted != null && 
+                                    (isCompleted.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+                                     isCompleted.Equals("да", StringComparison.OrdinalIgnoreCase) ||
+                                     isCompleted.Equals("выполнена", StringComparison.OrdinalIgnoreCase) ||
+                                     isCompleted.Equals("выполнено", StringComparison.OrdinalIgnoreCase) ||
+                                     isCompleted.Equals("completed", StringComparison.OrdinalIgnoreCase));
+                                
+                                if (itemCompleted == filterByCompleted)
+                                {
+                                    filtered.Add(item.Clone());
+                                }
+                            }
+                            if (filtered.Count > 0)
+                            {
+                                var options = new JsonSerializerOptions 
+                                { 
+                                    WriteIndented = true,
+                                    Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping 
+                                };
+                                rawText = JsonSerializer.Serialize(filtered, options);
+                            }
+                        }
+                    }
+                }
+                catch { /* не фильтруем */ }
+            }
+            
             // Форматируем JSON-ответы для читаемости
-            var formatted = FormatResponse(string.Join("\n", texts));
+            var formatted = FormatResponse(rawText);
             return formatted;
         }
 
@@ -248,6 +601,7 @@ public sealed class McpTodoService : IAsyncDisposable
 
     /// <summary>
     /// Форматирует JSON-ответ: Unicode → UTF-8, pretty-print, читаемые поля.
+    /// Обработка вложенных JSON-строк (MCP возвращает text как JSON-encoded string).
     /// </summary>
     private static string FormatResponse(string raw)
     {
@@ -256,35 +610,58 @@ public sealed class McpTodoService : IAsyncDisposable
 
         raw = raw.Trim();
 
-        // Если это массив или объект — форматируем как JSON
-        if (raw.StartsWith("[") || raw.StartsWith("{"))
+        // Если это массив или объект — форматируем как JSON с отступами
+        if ((raw.StartsWith("[") || raw.StartsWith("{")) && !raw.StartsWith("\""))
         {
             try
             {
-                var options = new JsonSerializerOptions
-                {
-                    WriteIndented = true,
-                    Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
-                };
-
-                // Сначала десериализуем в JsonDocument для красивого вывода
                 using var doc = JsonDocument.Parse(raw);
-                var formatted = doc.RootElement.GetRawText();
-
-                // Если JSON уже содержит Unicode-экраны — декодируем
-                var decoded = System.Text.RegularExpressions.Regex.Unescape(formatted);
-
-                // Форматируем ключи в читаемом виде
-                return decoded;
+                // Форматируем с отступами для читаемости
+                var options = new JsonSerializerOptions 
+                { 
+                    WriteIndented = true,
+                    Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping 
+                };
+                return doc.RootElement.GetRawText();
             }
             catch
             {
-                // Fallback: просто декодируем Unicode
                 return System.Text.RegularExpressions.Regex.Unescape(raw);
             }
         }
 
-        // Если это plain text — возвращаем как есть
+        // MCP возвращает text как JSON-encoded string: "{\"Id\": 5, ...}"
+        // Нужно распаковать строку, затем попытаться отформатировать содержимое как JSON
+        if (raw.StartsWith("\"") && raw.Length >= 2)
+        {
+            try
+            {
+                // Распаковываем JSON-строку
+                var unescaped = System.Text.RegularExpressions.Regex.Unescape(raw);
+                
+                // Проверяем, является ли распакованное содержимое JSON-объектом/массивом
+                var trimmed = unescaped.Trim();
+                if (trimmed.StartsWith("{") || trimmed.StartsWith("["))
+                {
+                    try
+                    {
+                        using var doc = JsonDocument.Parse(trimmed);
+                        return doc.RootElement.GetRawText();
+                    }
+                    catch
+                    {
+                        return unescaped;
+                    }
+                }
+                
+                return unescaped;
+            }
+            catch
+            {
+                return raw;
+            }
+        }
+
         return raw;
     }
 
@@ -307,6 +684,47 @@ public sealed class McpTodoService : IAsyncDisposable
     private void Log(string message, LogLevel level)
     {
         _log?.Invoke(message, level);
+    }
+
+    /// <summary>
+    /// Приводит значение аргумента к строке, обрабатывая string/int/bool/JsonElement.
+    /// </summary>
+    private static string? NormalizeToString(object? value)
+    {
+        if (value == null)
+            return null;
+
+        return value switch
+        {
+            string s => s,
+            JsonElement je => je.ValueKind == JsonValueKind.String ? je.GetString() : je.ToString(),
+            bool b => b.ToString().ToLowerInvariant(),
+            int or long or float or double or decimal => value.ToString(),
+            _ => value.ToString()
+        };
+    }
+
+    /// <summary>
+    /// Извлекает строковое значение свойства независимо от регистра.
+    /// </summary>
+    private static string? TryGetPropertyAsString(JsonElement element, params string[] propertyNames)
+    {
+        foreach (var name in propertyNames)
+        {
+            if (element.TryGetProperty(name, out var prop))
+            {
+                var val = prop.ValueKind switch
+                {
+                    JsonValueKind.String => prop.GetString(),
+                    JsonValueKind.Number => prop.GetInt32().ToString(),
+                    JsonValueKind.True or JsonValueKind.False => prop.GetBoolean().ToString().ToLowerInvariant(),
+                    JsonValueKind.Null => null,
+                    _ => prop.ToString()
+                };
+                return val;
+            }
+        }
+        return null;
     }
 
     public ValueTask DisposeAsync()
