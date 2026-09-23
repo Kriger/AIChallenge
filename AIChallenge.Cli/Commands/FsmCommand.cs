@@ -15,6 +15,7 @@ public sealed class FsmCommand : CommandHandler
             return true;
         }
 
+        var fsm = ctx.TaskStateMachine;
         var fsmCmd = parts[1].ToLowerInvariant();
         switch (fsmCmd)
         {
@@ -24,71 +25,80 @@ public sealed class FsmCommand : CommandHandler
                 break;
 
             case "questions":
-                await QuestionsCommand(parts, ctx);
+                if (parts.Length < 3) { PrintRed("❌ Формат: /fsm questions <вопрос1;вопрос2;вопрос3>"); Console.WriteLine(); }
+                else if (fsm.Stage != TaskStage.Requirements) { PrintRed($"❌ SetQuestions можно вызывать только на этапе Requirements (сейчас: {fsm.Stage})"); Console.WriteLine(); }
+                else { await RunAsync(() => ExecuteQuestions(fsm, parts)); }
                 break;
 
             case "answer":
-                await AnswerCommand(parts, ctx);
+                if (parts.Length < 3) { PrintRed("❌ Формат: /fsm answer <ответ>"); Console.WriteLine(); }
+                else { await RunAsync(() => ExecuteAnswer(fsm, parts)); }
                 break;
 
             case "next":
-                await NextCommand(ctx);
+                await RunAsync(() => ExecuteNext(fsm));
                 break;
 
             case "plan":
-                await PlanCommand(ctx);
+                await RunAsync(() => ExecutePlan(fsm));
                 break;
 
             case "execute":
-                await ExecuteCommand(parts, ctx);
+                if (parts.Length < 3) { PrintRed("❌ Формат: /fsm execute <описание шага>"); Console.WriteLine(); }
+                else { await RunAsync(() => ExecuteStep(fsm, parts)); }
                 break;
 
             case "validate":
-                await ValidateCommand(parts, ctx);
+                if (parts.Length < 3) { PrintRed("❌ Формат: /fsm validate <результат>"); Console.WriteLine(); }
+                else { await RunAsync(() => ExecuteValidate(fsm, parts)); }
                 break;
 
             case "transition":
-                await TransitionCommand(parts, ctx);
+                if (parts.Length < 3) { PrintRed("❌ Формат: /fsm transition <Planning|Execution|Validation|Done>"); Console.WriteLine(); }
+                else { await RunAsync(() => ExecuteTransition(fsm, parts[2])); }
                 break;
 
             case "allowed":
-                await AllowedCommand(ctx);
+                await RunAsync(() => ExecuteAllowed(fsm));
                 break;
 
             case "can":
-                await CanCommand(parts, ctx);
+                if (parts.Length < 3) { PrintRed("❌ Формат: /fsm can <Planning|Execution|Validation|Done>"); Console.WriteLine(); }
+                else { await RunAsync(() => ExecuteCan(fsm, parts[2])); }
                 break;
 
             case "stages":
-                await StagesCommand(ctx);
+                await RunAsync(() => ExecuteStages(fsm));
                 break;
 
             case "pause":
-                await PauseCommand(ctx);
+                await RunAsync(() => ExecutePause(fsm));
                 break;
 
             case "resume":
-                await ResumeCommand(ctx);
+                await RunAsync(() => ExecuteResume(fsm));
                 break;
 
             case "reset":
-                await ResetCommand(ctx);
+                await RunAsync(() => ExecuteReset(fsm));
                 break;
 
             case "save":
-                await SaveCommand(parts, ctx);
+                if (parts.Length < 3) { PrintRed("❌ Формат: /fsm save <файл.json>"); Console.WriteLine(); }
+                else { await RunAsync(() => ExecuteSave(fsm, parts[2])); }
                 break;
 
             case "load":
-                await LoadCommand(parts, ctx);
+                if (parts.Length < 3) { PrintRed("❌ Формат: /fsm load <файл.json>"); Console.WriteLine(); }
+                else { await RunAsync(() => ExecuteLoad(fsm, parts[2])); }
                 break;
 
             case "history":
-                await HistoryCommand(ctx);
+                await RunAsync(() => ExecuteHistory(fsm));
                 break;
 
             case "dialog":
-                await DialogCommand(ctx);
+                await RunAsync(() => ExecuteDialog(fsm));
                 break;
 
             case "help":
@@ -103,7 +113,16 @@ public sealed class FsmCommand : CommandHandler
         return true;
     }
 
-    private async Task ShowStatusAsync(CommandContext ctx)
+    /// <summary>
+    /// Выполняет команду с общим try/catch и печатью ошибки.
+    /// </summary>
+    private static async Task RunAsync(Func<Task> action)
+    {
+        try { await action(); }
+        catch (Exception ex) { PrintRed($"❌ Ошибка: {ex.Message}"); Console.WriteLine(); }
+    }
+
+    private static async Task ShowStatusAsync(CommandContext ctx)
     {
         PrintYellow("📋 TaskStateMachine:");
         var fsm = ctx.TaskStateMachine;
@@ -140,21 +159,8 @@ public sealed class FsmCommand : CommandHandler
         Console.WriteLine();
     }
 
-    private async Task QuestionsCommand(string[] parts, CommandContext ctx)
+    private static async Task ExecuteQuestions(TaskStateMachine fsm, string[] parts)
     {
-        if (parts.Length < 3)
-        {
-            PrintRed("❌ Формат: /fsm questions <вопрос1;вопрос2;вопрос3>");
-            Console.WriteLine();
-            return;
-        }
-        var fsm = ctx.TaskStateMachine;
-        if (fsm.Stage != TaskStage.Requirements)
-        {
-            PrintRed($"❌ SetQuestions можно вызывать только на этапе Requirements (сейчас: {fsm.Stage})");
-            Console.WriteLine();
-            return;
-        }
         var questionsText = string.Join(" ", parts.Skip(2));
         var questions = questionsText.Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
         if (questions.Length == 0)
@@ -163,166 +169,87 @@ public sealed class FsmCommand : CommandHandler
             Console.WriteLine();
             return;
         }
-        try
-        {
-            fsm.SetQuestions(new List<string>(questions));
-            PrintGreen($"✅ Задано {questions.Length} вопрос(ов):");
-            for (int i = 0; i < questions.Length; i++)
-                Console.WriteLine($"   {i + 1}. {questions[i]}");
-            Console.WriteLine();
-        }
-        catch (Exception ex)
-        {
-            PrintRed($"❌ Ошибка: {ex.Message}");
-            Console.WriteLine();
-        }
+        fsm.SetQuestions(new List<string>(questions));
+        PrintGreen($"✅ Задано {questions.Length} вопрос(ов):");
+        for (int i = 0; i < questions.Length; i++)
+            Console.WriteLine($"   {i + 1}. {questions[i]}");
+        Console.WriteLine();
     }
 
-    private async Task AnswerCommand(string[] parts, CommandContext ctx)
+    private static async Task ExecuteAnswer(TaskStateMachine fsm, string[] parts)
     {
-        if (parts.Length < 3)
-        {
-            PrintRed("❌ Формат: /fsm answer <ответ>");
-            Console.WriteLine();
-            return;
-        }
         var answer = string.Join(" ", parts.Skip(2));
-        var fsm = ctx.TaskStateMachine;
-        try
+        fsm.ReceiveAnswer(answer);
+        PrintGreen($"✅ Ответ записан: \"{answer}\"");
+        var nextQuestion = fsm.AskNextQuestion();
+        if (nextQuestion is null)
+            Console.WriteLine("   Все вопросы заданы! Используйте /fsm transition Planning для перехода к планированию.");
+        else
         {
-            fsm.ReceiveAnswer(answer);
-            PrintGreen($"✅ Ответ записан: \"{answer}\"");
-            var nextQuestion = fsm.AskNextQuestion();
-            if (nextQuestion is null)
-                Console.WriteLine("   Все вопросы заданы! Используйте /fsm transition Planning для перехода к планированию.");
-            else
-            {
-                Console.ForegroundColor = ConsoleColor.Cyan;
-                Console.WriteLine($"   Следующий вопрос:");
-                Console.ResetColor();
-                Console.WriteLine($"   {nextQuestion}");
-            }
-            Console.WriteLine();
-        }
-        catch (Exception ex)
-        {
-            PrintRed($"❌ Ошибка: {ex.Message}");
-            Console.WriteLine();
-        }
-    }
-
-    private async Task NextCommand(CommandContext ctx)
-    {
-        var fsm = ctx.TaskStateMachine;
-        try
-        {
-            if (fsm.RequirementsContext is null)
-            {
-                PrintYellow("   Вопросы ещё не заданы. Используйте /fsm questions <вопрос1;вопрос2>");
-                Console.WriteLine();
-                return;
-            }
-            var nextQ = fsm.AskNextQuestion();
-            if (nextQ is null)
-            {
-                PrintYellow("   Все вопросы заданы.");
-                Console.WriteLine();
-            }
-            else
-            {
-                Console.ForegroundColor = ConsoleColor.Cyan;
-                Console.WriteLine($"   Вопрос: {nextQ}");
-                Console.ResetColor();
-                Console.WriteLine();
-            }
-        }
-        catch (Exception ex)
-        {
-            PrintRed($"❌ Ошибка: {ex.Message}");
-            Console.WriteLine();
-        }
-    }
-
-    private async Task PlanCommand(CommandContext ctx)
-    {
-        var fsm = ctx.TaskStateMachine;
-        try
-        {
-            PrintYellow("📋 Выполняю планирование через LLM...");
-            var planResult = await fsm.ExecutePlanningAsync();
-            PrintGreen("✅ Планирование завершено:");
-            Console.WriteLine($"   {planResult}");
-            Console.WriteLine();
-        }
-        catch (Exception ex)
-        {
-            PrintRed($"❌ Ошибка планирования: {ex.Message}");
-            Console.WriteLine();
-        }
-    }
-
-    private async Task ExecuteCommand(string[] parts, CommandContext ctx)
-    {
-        if (parts.Length < 3)
-        {
-            PrintRed("❌ Формат: /fsm execute <описание шага>");
-            Console.WriteLine();
-            return;
-        }
-        var stepDesc = string.Join(" ", parts.Skip(2));
-        var fsm = ctx.TaskStateMachine;
-        try
-        {
-            PrintYellow($"⚙ Выполняю шаг: {stepDesc}");
-            var execResult = await fsm.ExecuteStepAsync(stepDesc);
-            PrintGreen("✅ Шаг выполнен:");
-            Console.WriteLine($"   {execResult}");
-            Console.WriteLine();
-        }
-        catch (Exception ex)
-        {
-            PrintRed($"❌ Ошибка выполнения: {ex.Message}");
-            Console.WriteLine();
-        }
-    }
-
-    private async Task ValidateCommand(string[] parts, CommandContext ctx)
-    {
-        if (parts.Length < 3)
-        {
-            PrintRed("❌ Формат: /fsm validate <результат>");
-            Console.WriteLine();
-            return;
-        }
-        var validationResult = string.Join(" ", parts.Skip(2));
-        var fsm = ctx.TaskStateMachine;
-        try
-        {
-            PrintYellow("🔍 Выполняю валидацию через LLM...");
-            var (passed, feedback) = await fsm.ValidateAsync(validationResult);
-            Console.ForegroundColor = passed ? ConsoleColor.Green : ConsoleColor.Red;
-            Console.WriteLine($"Результат: {(passed ? "PASS ✅" : "FAIL ❌")}");
+            Console.ForegroundColor = ConsoleColor.Cyan;
+            Console.WriteLine($"   Следующий вопрос:");
             Console.ResetColor();
-            Console.WriteLine($"   {feedback}");
+            Console.WriteLine($"   {nextQuestion}");
+        }
+        Console.WriteLine();
+    }
+
+    private static async Task ExecuteNext(TaskStateMachine fsm)
+    {
+        if (fsm.RequirementsContext is null)
+        {
+            PrintYellow("   Вопросы ещё не заданы. Используйте /fsm questions <вопрос1;вопрос2>");
+            Console.WriteLine();
+            return;
+        }
+        var nextQ = fsm.AskNextQuestion();
+        if (nextQ is null)
+        {
+            PrintYellow("   Все вопросы заданы.");
             Console.WriteLine();
         }
-        catch (Exception ex)
+        else
         {
-            PrintRed($"❌ Ошибка валидации: {ex.Message}");
+            Console.ForegroundColor = ConsoleColor.Cyan;
+            Console.WriteLine($"   Вопрос: {nextQ}");
+            Console.ResetColor();
             Console.WriteLine();
         }
     }
 
-    private async Task TransitionCommand(string[] parts, CommandContext ctx)
+    private static async Task ExecutePlan(TaskStateMachine fsm)
     {
-        if (parts.Length < 3)
-        {
-            PrintRed("❌ Формат: /fsm transition <Planning|Execution|Validation|Done>");
-            Console.WriteLine();
-            return;
-        }
-        var targetStageStr = parts[2];
-        var fsm = ctx.TaskStateMachine;
+        PrintYellow("📋 Выполняю планирование через LLM...");
+        var planResult = await fsm.ExecutePlanningAsync();
+        PrintGreen("✅ Планирование завершено:");
+        Console.WriteLine($"   {planResult}");
+        Console.WriteLine();
+    }
+
+    private static async Task ExecuteStep(TaskStateMachine fsm, string[] parts)
+    {
+        var stepDesc = string.Join(" ", parts.Skip(2));
+        PrintYellow($"⚙ Выполняю шаг: {stepDesc}");
+        var execResult = await fsm.ExecuteStepAsync(stepDesc);
+        PrintGreen("✅ Шаг выполнен:");
+        Console.WriteLine($"   {execResult}");
+        Console.WriteLine();
+    }
+
+    private static async Task ExecuteValidate(TaskStateMachine fsm, string[] parts)
+    {
+        var validationResult = string.Join(" ", parts.Skip(2));
+        PrintYellow("🔍 Выполняю валидацию через LLM...");
+        var (passed, feedback) = await fsm.ValidateAsync(validationResult);
+        Console.ForegroundColor = passed ? ConsoleColor.Green : ConsoleColor.Red;
+        Console.WriteLine($"Результат: {(passed ? "PASS ✅" : "FAIL ❌")}");
+        Console.ResetColor();
+        Console.WriteLine($"   {feedback}");
+        Console.WriteLine();
+    }
+
+    private static async Task ExecuteTransition(TaskStateMachine fsm, string targetStageStr)
+    {
         if (Enum.TryParse<TaskStage>(targetStageStr, ignoreCase: true, out var targetStage))
         {
             var check = fsm.CanTransition(targetStage);
@@ -340,24 +267,11 @@ public sealed class FsmCommand : CommandHandler
                 Console.WriteLine();
             }
 
-            try
-            {
-                fsm.Transition(targetStage);
-                PrintGreen($"✅ Переход выполнен: {targetStage}");
-                Console.WriteLine($"   Шаг: {fsm.Step.Number}/{fsm.Step.Total} — {fsm.Step.Description}");
-                Console.WriteLine($"   Действие: {fsm.NextAction}");
-                Console.WriteLine();
-            }
-            catch (InvalidTransitionError ex)
-            {
-                PrintRed($"❌ Недопустимый переход: {ex.Message}");
-                Console.WriteLine();
-            }
-            catch (Exception ex)
-            {
-                PrintRed($"❌ Ошибка перехода: {ex.Message}");
-                Console.WriteLine();
-            }
+            fsm.Transition(targetStage);
+            PrintGreen($"✅ Переход выполнен: {targetStage}");
+            Console.WriteLine($"   Шаг: {fsm.Step.Number}/{fsm.Step.Total} — {fsm.Step.Description}");
+            Console.WriteLine($"   Действие: {fsm.NextAction}");
+            Console.WriteLine();
         }
         else
         {
@@ -366,9 +280,8 @@ public sealed class FsmCommand : CommandHandler
         }
     }
 
-    private async Task AllowedCommand(CommandContext ctx)
+    private static async Task ExecuteAllowed(TaskStateMachine fsm)
     {
-        var fsm = ctx.TaskStateMachine;
         var allowed = fsm.GetAllowedTransitions();
         Console.WriteLine($"📋 Допустимые переходы из '{fsm.Stage}':");
         Console.WriteLine();
@@ -391,16 +304,8 @@ public sealed class FsmCommand : CommandHandler
         Console.WriteLine();
     }
 
-    private async Task CanCommand(string[] parts, CommandContext ctx)
+    private static async Task ExecuteCan(TaskStateMachine fsm, string canStageStr)
     {
-        if (parts.Length < 3)
-        {
-            PrintRed("❌ Формат: /fsm can <Planning|Execution|Validation|Done>");
-            Console.WriteLine();
-            return;
-        }
-        var canStageStr = parts[2];
-        var fsm = ctx.TaskStateMachine;
         if (Enum.TryParse<TaskStage>(canStageStr, ignoreCase: true, out var canStage))
         {
             var checkResult = fsm.CanTransition(canStage);
@@ -420,7 +325,7 @@ public sealed class FsmCommand : CommandHandler
         }
     }
 
-    private async Task StagesCommand(CommandContext ctx)
+    private static async Task ExecuteStages(TaskStateMachine fsm)
     {
         Console.WriteLine("📋 Полный список этапов задачи:");
         Console.WriteLine();
@@ -441,7 +346,7 @@ public sealed class FsmCommand : CommandHandler
             [TaskStage.Resuming] = "Возобновление (служебное)"
         };
 
-        var currentStage = ctx.TaskStateMachine.Stage;
+        var currentStage = fsm.Stage;
         var isCurrent = (TaskStage s) => s == currentStage ? " ◀ текущий" : "";
 
         Console.WriteLine("  Этап                      | Описание");
@@ -475,123 +380,16 @@ public sealed class FsmCommand : CommandHandler
         Console.WriteLine();
     }
 
-    private async Task ResumeCommand(CommandContext ctx)
+    private static async Task ExecuteResume(TaskStateMachine fsm)
     {
-        var fsm = ctx.TaskStateMachine;
-        try
+        var resumeFile = "fsm_state.json";
+        if (File.Exists(resumeFile))
         {
-            var resumeFile = "fsm_state.json";
-            if (File.Exists(resumeFile))
-            {
-                var json = File.ReadAllText(resumeFile, Encoding.UTF8);
-                var loaded = TaskStateMachine.FromJson(json);
-                fsm.LoadState(loaded.GetState());
-
-                PrintGreen($"▶ Задача возобновлена из: {resumeFile}");
-                Console.WriteLine($"   Этап: {fsm.Stage}");
-                Console.WriteLine($"   Шаг: {fsm.Step.Number}/{fsm.Step.Total} — {fsm.Step.Description}");
-
-                var reqStatusLoad = fsm.GetRequirementsStatus();
-                if (reqStatusLoad is not null)
-                {
-                    Console.WriteLine($"   Вопросы: {reqStatusLoad.AnsweredQuestions}/{reqStatusLoad.TotalQuestions} задано");
-                    if (!reqStatusLoad.IsComplete)
-                    {
-                        if (fsm.RequirementsContext is not null)
-                        {
-                            var nextQ = fsm.AskNextQuestion();
-                            if (nextQ is not null)
-                                Console.WriteLine($"   Следующий вопрос: {nextQ}");
-                        }
-                    }
-                }
-                Console.WriteLine();
-            }
-            else
-            {
-                fsm.Resume();
-                PrintGreen("▶ Задача возобновлена");
-                Console.WriteLine();
-            }
-        }
-        catch (Exception ex)
-        {
-            PrintRed($"❌ Ошибка: {ex.Message}");
-            Console.WriteLine();
-        }
-    }
-
-    private async Task ResetCommand(CommandContext ctx)
-    {
-        var fsm = ctx.TaskStateMachine;
-        try
-        {
-            fsm.ResetAfterCompletion();
-            var resetFile = "fsm_state.json";
-            if (File.Exists(resetFile))
-            {
-                File.Delete(resetFile);
-                PrintYellow($"🗑 Файл состояния удалён: {resetFile}");
-            }
-            PrintGreen("✅ Состояние FSM сброшено");
-            Console.WriteLine($"   Этап: {fsm.Stage}");
-            Console.WriteLine($"   Шаг: {fsm.Step.Number}/{fsm.Step.Total} — {fsm.Step.Description}");
-            Console.WriteLine();
-        }
-        catch (Exception ex)
-        {
-            PrintRed($"❌ Ошибка: {ex.Message}");
-            Console.WriteLine();
-        }
-    }
-
-    private async Task SaveCommand(string[] parts, CommandContext ctx)
-    {
-        if (parts.Length < 3)
-        {
-            PrintRed("❌ Формат: /fsm save <файл.json>");
-            Console.WriteLine();
-            return;
-        }
-        var saveFile = parts[2];
-        var fsm = ctx.TaskStateMachine;
-        try
-        {
-            var json = fsm.ToJson();
-            File.WriteAllText(saveFile, json, Encoding.UTF8);
-            PrintGreen($"✅ Состояние сохранено в {saveFile}");
-            Console.WriteLine();
-        }
-        catch (Exception ex)
-        {
-            PrintRed($"❌ Ошибка сохранения: {ex.Message}");
-            Console.WriteLine();
-        }
-    }
-
-    private async Task LoadCommand(string[] parts, CommandContext ctx)
-    {
-        if (parts.Length < 3)
-        {
-            PrintRed("❌ Формат: /fsm load <файл.json>");
-            Console.WriteLine();
-            return;
-        }
-        var loadFile = parts[2];
-        if (!File.Exists(loadFile))
-        {
-            PrintRed($"❌ Файл не найден: {loadFile}");
-            Console.WriteLine();
-            return;
-        }
-        var fsm = ctx.TaskStateMachine;
-        try
-        {
-            var json = File.ReadAllText(loadFile, Encoding.UTF8);
+            var json = File.ReadAllText(resumeFile, Encoding.UTF8);
             var loaded = TaskStateMachine.FromJson(json);
             fsm.LoadState(loaded.GetState());
 
-            PrintGreen($"✅ Состояние загружено из {loadFile}");
+            PrintGreen($"▶ Задача возобновлена из: {resumeFile}");
             Console.WriteLine($"   Этап: {fsm.Stage}");
             Console.WriteLine($"   Шаг: {fsm.Step.Number}/{fsm.Step.Total} — {fsm.Step.Description}");
 
@@ -604,27 +402,84 @@ public sealed class FsmCommand : CommandHandler
                     if (fsm.RequirementsContext is not null)
                     {
                         var nextQ = fsm.AskNextQuestion();
-                        Console.WriteLine($"   Следующий вопрос: {nextQ ?? "(все заданы)"}");
-                    }
-                    else
-                    {
-                        Console.WriteLine("   Вопросы ещё не заданы.");
+                        if (nextQ is not null)
+                            Console.WriteLine($"   Следующий вопрос: {nextQ}");
                     }
                 }
             }
             Console.WriteLine();
         }
-        catch (Exception ex)
+        else
         {
-            PrintRed($"❌ Ошибка загрузки: {ex.Message}");
+            fsm.Resume();
+            PrintGreen("▶ Задача возобновлена");
             Console.WriteLine();
         }
     }
 
-    private async Task HistoryCommand(CommandContext ctx)
+    private static async Task ExecuteReset(TaskStateMachine fsm)
+    {
+        fsm.ResetAfterCompletion();
+        var resetFile = "fsm_state.json";
+        if (File.Exists(resetFile))
+        {
+            File.Delete(resetFile);
+            PrintYellow($"🗑 Файл состояния удалён: {resetFile}");
+        }
+        PrintGreen("✅ Состояние FSM сброшено");
+        Console.WriteLine($"   Этап: {fsm.Stage}");
+        Console.WriteLine($"   Шаг: {fsm.Step.Number}/{fsm.Step.Total} — {fsm.Step.Description}");
+        Console.WriteLine();
+    }
+
+    private static async Task ExecuteSave(TaskStateMachine fsm, string saveFile)
+    {
+        var json = fsm.ToJson();
+        File.WriteAllText(saveFile, json, Encoding.UTF8);
+        PrintGreen($"✅ Состояние сохранено в {saveFile}");
+        Console.WriteLine();
+    }
+
+    private static async Task ExecuteLoad(TaskStateMachine fsm, string loadFile)
+    {
+        if (!File.Exists(loadFile))
+        {
+            PrintRed($"❌ Файл не найден: {loadFile}");
+            Console.WriteLine();
+            return;
+        }
+        var json = File.ReadAllText(loadFile, Encoding.UTF8);
+        var loaded = TaskStateMachine.FromJson(json);
+        fsm.LoadState(loaded.GetState());
+
+        PrintGreen($"✅ Состояние загружено из {loadFile}");
+        Console.WriteLine($"   Этап: {fsm.Stage}");
+        Console.WriteLine($"   Шаг: {fsm.Step.Number}/{fsm.Step.Total} — {fsm.Step.Description}");
+
+        var reqStatusLoad = fsm.GetRequirementsStatus();
+        if (reqStatusLoad is not null)
+        {
+            Console.WriteLine($"   Вопросы: {reqStatusLoad.AnsweredQuestions}/{reqStatusLoad.TotalQuestions} задано");
+            if (!reqStatusLoad.IsComplete)
+            {
+                if (fsm.RequirementsContext is not null)
+                {
+                    var nextQ = fsm.AskNextQuestion();
+                    Console.WriteLine($"   Следующий вопрос: {nextQ ?? "(все заданы)"}");
+                }
+                else
+                {
+                    Console.WriteLine("   Вопросы ещё не заданы.");
+                }
+            }
+        }
+        Console.WriteLine();
+    }
+
+    private static async Task ExecuteHistory(TaskStateMachine fsm)
     {
         PrintYellow("📜 История переходов:");
-        var history = ctx.TaskStateMachine.History;
+        var history = fsm.History;
         if (history.Count == 0)
         {
             Console.WriteLine("   (пусто)");
@@ -639,10 +494,10 @@ public sealed class FsmCommand : CommandHandler
         Console.WriteLine();
     }
 
-    private async Task DialogCommand(CommandContext ctx)
+    private static async Task ExecuteDialog(TaskStateMachine fsm)
     {
         PrintYellow("💬 История диалога текущего этапа:");
-        var dialogHistory = ctx.TaskStateMachine.GetDialogHistory();
+        var dialogHistory = fsm.GetDialogHistory();
         if (dialogHistory.Count == 0)
         {
             Console.WriteLine("   (пусто)");
@@ -666,7 +521,7 @@ public sealed class FsmCommand : CommandHandler
         Console.WriteLine();
     }
 
-    private async Task HelpCommand(CommandContext ctx)
+    private static async Task HelpCommand(CommandContext ctx)
     {
         Console.WriteLine("📖 Справка по FSM-командам:");
         Console.WriteLine();
@@ -696,26 +551,16 @@ public sealed class FsmCommand : CommandHandler
         Console.WriteLine();
     }
 
-    private async Task PauseCommand(CommandContext ctx)
+    private static async Task ExecutePause(TaskStateMachine fsm)
     {
-        var fsm = ctx.TaskStateMachine;
-        try
-        {
-            // Сохраняем состояние в файл перед паузой
-            var pauseFile = "fsm_state.json";
-            var json = fsm.ToJson();
-            File.WriteAllText(pauseFile, json, Encoding.UTF8);
+        var pauseFile = "fsm_state.json";
+        var json = fsm.ToJson();
+        File.WriteAllText(pauseFile, json, Encoding.UTF8);
 
-            fsm.Pause();
-            PrintYellow("⏸ Задача поставлена на паузу");
-            Console.WriteLine($"   Состояние сохранено в: {pauseFile}");
-            Console.WriteLine("   Для продолжения: /fsm resume");
-            Console.WriteLine();
-        }
-        catch (Exception ex)
-        {
-            PrintRed($"❌ Ошибка: {ex.Message}");
-            Console.WriteLine();
-        }
+        fsm.Pause();
+        PrintYellow("⏸ Задача поставлена на паузу");
+        Console.WriteLine($"   Состояние сохранено в: {pauseFile}");
+        Console.WriteLine("   Для продолжения: /fsm resume");
+        Console.WriteLine();
     }
 }

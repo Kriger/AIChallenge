@@ -75,45 +75,26 @@ public sealed class FactsCommand : CommandHandler
     {
         PrintYellow("🧠 Факты:");
 
-        if (ctx.Agent.ContextManager.Config.Strategy == ContextStrategy.Branching &&
-            ctx.Agent.ContextManager.Branching is { } branchingFacts)
+        var storage = ctx.Agent.ContextManager.ActiveFactStorage;
+        if (storage == null)
         {
-            var facts = branchingFacts.Facts;
-            if (facts.Count == 0)
-                Console.WriteLine("   (пусто)");
-            else
-                foreach (var kvp in facts)
-                {
-                    Console.ForegroundColor = ConsoleColor.Cyan;
-                    Console.Write($"   → {kvp.Key}: ");
-                    Console.ResetColor();
-                    Console.WriteLine(kvp.Value);
-                }
-            Console.WriteLine();
-            Console.WriteLine($"   Всего фактов: {facts.Count} (ветка: {branchingFacts.ActiveBranchName})");
+            PrintYellow("   Ни одна стратегия с фактами не активна.");
+            Console.WriteLine("   Переключитесь: /context strategy sticky или /context strategy branching");
         }
-        else if (ctx.Agent.ContextManager.StickyFacts is { } sf)
+        else if (storage.Facts.Count == 0)
         {
-            var facts = sf.Facts;
-            if (facts.Count == 0)
-                Console.WriteLine("   (пусто)");
-            else
-                foreach (var kvp in facts)
-                {
-                    Console.ForegroundColor = ConsoleColor.Cyan;
-                    Console.Write($"   → {kvp.Key}: ");
-                    Console.ResetColor();
-                    Console.WriteLine(kvp.Value);
-                }
-            Console.WriteLine();
-            Console.WriteLine($"   Всего фактов: {facts.Count}");
+            Console.WriteLine("   (пусто)");
         }
         else
         {
-            Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.WriteLine("   Ни одна стратегия с фактами не активна.");
-            Console.WriteLine("   Переключитесь: /context strategy sticky или /context strategy branching");
-            Console.ResetColor();
+            foreach (var kvp in storage.Facts)
+            {
+                Console.ForegroundColor = ConsoleColor.Cyan;
+                Console.Write($"   → {kvp.Key}: ");
+                Console.ResetColor();
+                Console.WriteLine(kvp.Value);
+            }
+            Console.WriteLine($"   Всего фактов: {storage.Facts.Count}");
         }
         Console.WriteLine();
     }
@@ -127,21 +108,16 @@ public sealed class FactsCommand : CommandHandler
             return;
         }
 
-        if (ctx.Agent.ContextManager.Config.Strategy == ContextStrategy.Branching &&
-            ctx.Agent.ContextManager.Branching is { } branchingSave)
-        {
-            branchingSave.SaveFact(parts[2], parts[3]);
-            PrintGreen($"✅ Факт сохранён: {parts[2]} = \"{parts[3]}\" (ветка: {branchingSave.ActiveBranchName})");
-        }
-        else if (ctx.Agent.ContextManager.StickyFacts is { } stickyFacts2)
-        {
-            stickyFacts2.SaveFact(parts[2], parts[3]);
-            PrintGreen($"✅ Факт сохранён: {parts[2]} = \"{parts[3]}\"");
-        }
-        else
+        var storage = ctx.Agent.ContextManager.ActiveFactStorage;
+        if (storage == null)
         {
             PrintYellow("⚠️  Ни одна стратегия с фактами не активна.");
             Console.WriteLine("   Переключитесь: /context strategy sticky или /context strategy branching");
+        }
+        else
+        {
+            storage.SaveFact(parts[2], parts[3]);
+            PrintGreen($"✅ Факт сохранён: {parts[2]} = \"{parts[3]}\"");
         }
         Console.WriteLine();
     }
@@ -155,25 +131,19 @@ public sealed class FactsCommand : CommandHandler
             return;
         }
 
-        if (ctx.Agent.ContextManager.Config.Strategy == ContextStrategy.Branching &&
-            ctx.Agent.ContextManager.Branching is { } branchingDelete)
-        {
-            if (branchingDelete.DeleteFact(parts[2]))
-                PrintGreen($"✅ Факт удалён: {parts[2]}");
-            else
-                PrintRed($"❌ Факт не найден: {parts[2]}");
-        }
-        else if (ctx.Agent.ContextManager.StickyFacts is { } stickyFacts3)
-        {
-            if (stickyFacts3.DeleteFact(parts[2]))
-                PrintGreen($"✅ Факт удалён: {parts[2]}");
-            else
-                PrintRed($"❌ Факт не найден: {parts[2]}");
-        }
-        else
+        var storage = ctx.Agent.ContextManager.ActiveFactStorage;
+        if (storage == null)
         {
             PrintYellow("⚠️  Ни одна стратегия с фактами не активна.");
             Console.WriteLine("   Переключитесь: /context strategy sticky или /context strategy branching");
+        }
+        else if (storage.DeleteFact(parts[2]))
+        {
+            PrintGreen($"✅ Факт удалён: {parts[2]}");
+        }
+        else
+        {
+            PrintRed($"❌ Факт не найден: {parts[2]}");
         }
         Console.WriteLine();
     }

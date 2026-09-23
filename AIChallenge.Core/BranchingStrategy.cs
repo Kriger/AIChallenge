@@ -9,7 +9,7 @@ namespace AIChallenge.Core.Infrastructure;
 /// Позволяет сохранять checkpoint и создавать ветки от одного места.
 /// Каждая ветка развивается независимо.
 /// </summary>
-public class BranchingStrategy : IContextStrategy
+public class BranchingStrategy : IContextStrategy, IFactStorage
 {
     private readonly List<DialogueBranch> _branches = new();
     private readonly List<BranchCheckpoint> _checkpoints = new();

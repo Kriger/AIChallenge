@@ -25,11 +25,11 @@ public sealed class McpTodoCommand : CommandHandler
         {
             PrintYellow("📋 Использование TodoMCP:");
             Console.WriteLine();
-            PrintCmd("connect", "подключиться к TodoMCP");
-            PrintCmd("tools", "список инструментов");
-            PrintCmd("call <tool> <json>", "вызвать инструмент");
-            PrintCmd("list", "список задач (list_todo_items)");
-            PrintCmd("status", "статус подключения");
+            PrintCmd("todo", "connect", "подключиться к TodoMCP");
+            PrintCmd("todo", "tools", "список инструментов");
+            PrintCmd("todo", "call <tool> <json>", "вызвать инструмент");
+            PrintCmd("todo", "list", "список задач (list_todo_items)");
+            PrintCmd("todo", "status", "статус подключения");
             Console.WriteLine();
             return true;
         }
@@ -193,39 +193,4 @@ public sealed class McpTodoCommand : CommandHandler
         Console.WriteLine();
     }
 
-    private static void PrintCmd(string cmd, string desc)
-    {
-        Console.Write($"   /todo {cmd,-45}");
-        Console.ForegroundColor = ConsoleColor.Gray;
-        Console.WriteLine($"— {desc}");
-        Console.ResetColor();
-    }
-
-    private static void PrintCyan(string text)
-    {
-        Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.WriteLine(text);
-        Console.ResetColor();
-    }
-
-    private static void PrintGreen(string text)
-    {
-        Console.ForegroundColor = ConsoleColor.Green;
-        Console.WriteLine(text);
-        Console.ResetColor();
-    }
-
-    private static void PrintRed(string text)
-    {
-        Console.ForegroundColor = ConsoleColor.Red;
-        Console.WriteLine(text);
-        Console.ResetColor();
-    }
-
-    private static void PrintGray(string text)
-    {
-        Console.ForegroundColor = ConsoleColor.DarkGray;
-        Console.WriteLine(text);
-        Console.ResetColor();
-    }
 }

@@ -48,4 +48,15 @@ public static class ConsoleHelpers
         Console.WriteLine(message);
         Console.ResetColor();
     }
+
+    /// <summary>
+    /// Форматированная строка команды: "   /cmd             — описание".
+    /// </summary>
+    public static void PrintCmd(string prefix, string cmd, string desc)
+    {
+        Console.Write($"   /{prefix} {cmd,-45}");
+        Console.ForegroundColor = ConsoleColor.Gray;
+        Console.WriteLine($"— {desc}");
+        Console.ResetColor();
+    }
 }

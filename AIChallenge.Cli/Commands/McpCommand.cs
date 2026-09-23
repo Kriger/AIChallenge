@@ -26,10 +26,10 @@ public sealed class McpCommand : CommandHandler
         {
             PrintYellow("🔌 Использование MCP GitHub:");
             Console.WriteLine();
-            PrintCmd("connect", "подключиться к MCP GitHub");
-            PrintCmd("tools", "показать список инструментов");
-            PrintCmd("call <tool> <json-args>", "вызвать инструмент");
-            PrintCmd("status", "статус подключения");
+            PrintCmd("mcp", "connect", "подключиться к MCP GitHub");
+            PrintCmd("mcp", "tools", "показать список инструментов");
+            PrintCmd("mcp", "call <tool> <json-args>", "вызвать инструмент");
+            PrintCmd("mcp", "status", "статус подключения");
             Console.WriteLine();
             return true;
         }
@@ -164,39 +164,4 @@ public sealed class McpCommand : CommandHandler
         Console.WriteLine();
     }
 
-    private static void PrintCmd(string cmd, string desc)
-    {
-        Console.Write($"   /mcp {cmd,-45}");
-        Console.ForegroundColor = ConsoleColor.Gray;
-        Console.WriteLine($"— {desc}");
-        Console.ResetColor();
-    }
-
-    private static void PrintCyan(string text)
-    {
-        Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.WriteLine(text);
-        Console.ResetColor();
-    }
-
-    private static void PrintGreen(string text)
-    {
-        Console.ForegroundColor = ConsoleColor.Green;
-        Console.WriteLine(text);
-        Console.ResetColor();
-    }
-
-    private static void PrintRed(string text)
-    {
-        Console.ForegroundColor = ConsoleColor.Red;
-        Console.WriteLine(text);
-        Console.ResetColor();
-    }
-
-    private static void PrintGray(string text)
-    {
-        Console.ForegroundColor = ConsoleColor.DarkGray;
-        Console.WriteLine(text);
-        Console.ResetColor();
-    }
 }

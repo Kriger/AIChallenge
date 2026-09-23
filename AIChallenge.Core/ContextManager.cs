@@ -39,6 +39,14 @@ public class ContextManager
     /// <summary>Текущая стратегия.</summary>
     public ContextStrategy CurrentStrategy { get; private set; }
 
+    /// <summary>Активное хранилище фактов (Branching или StickyFacts), если активна соответствующая стратегия.</summary>
+    public IFactStorage? ActiveFactStorage => Config.Strategy switch
+    {
+        ContextStrategy.Branching when _branching is { } b => b,
+        ContextStrategy.StickyFacts when _stickyFacts is { } s => s,
+        _ => null
+    };
+
     /// <summary>Общее количество сообщений в истории (legacy).</summary>
     public int TotalHistoryCount => _fullHistory.Count;
 

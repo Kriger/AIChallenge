@@ -952,7 +952,6 @@ public class ChatAgent
         {
             var token = await _authClient.GetAccessTokenAsync();
 
-            // Формируем текст полного диалога для анализа
             var dialogueText = string.Join("\n", dialogue?.Select(e => $"{e.Role}: {e.Content}") ?? new[] { $"{userMessage}\n{assistantAnswer}" });
 
             var extractionPrompt = $"""
@@ -972,71 +971,17 @@ public class ChatAgent
                 Если фактов нет — напиши "нет фактов".
                 """;
 
-            var extractionMessages = new List<ApiMessage>
+            var factsText = await CallFactsExtractionApiAsync(token, extractionPrompt);
+
+            if (!string.IsNullOrWhiteSpace(factsText) && factsText != "нет фактов")
             {
-                new() { Role = "user", Content = extractionPrompt },
-            };
-
-            var extractionRequest = new Dictionary<string, object>
-            {
-                ["model"] = Model,
-                ["messages"] = extractionMessages.Select(m => new { m.Role, m.Content }).ToList<object>(),
-                ["stream"] = false,
-            };
-
-            var httpClient = new HttpClient();
-            httpClient.DefaultRequestHeaders.Authorization =
-                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
-            httpClient.BaseAddress = new Uri("https://api.giga.chat");
-
-            var response = await httpClient.PostAsJsonAsync("/v1/chat/completions", extractionRequest);
-
-            if (response.IsSuccessStatusCode)
-            {
-                var parsed = await response.Content.ReadFromJsonAsync<ExtractionResponse>();
-                if (parsed?.Choices?.Count > 0)
-                {
-                    var factsText = parsed.Choices[0].Message?.Content ?? "";
-
-                    if (!string.IsNullOrWhiteSpace(factsText) && factsText != "нет фактов")
-                    {
-                        var lines = factsText.Split(['\n', '\r'], StringSplitOptions.RemoveEmptyEntries);
-                        var extractedCount = 0;
-                        foreach (var line in lines)
-                        {
-                            var trimmed = line.Trim();
-                            var colonIndex = trimmed.IndexOf(':');
-                            if (colonIndex > 0 && colonIndex < trimmed.Length - 1)
-                            {
-                                var key = trimmed[..colonIndex].Trim();
-                                var value = trimmed[(colonIndex + 1)..].Trim();
-
-                                if (key.Length > 0 && value.Length > 0)
-                                {
-                                    // Сохраняем факты в активную стратегию
-                                    SaveExtractedFact(key, value);
-                                    extractedCount++;
-                                }
-                            }
-                        }
-                        Logger.Info($"Извлечение фактов: найдено {extractedCount} факт(ов)");
-                    }
-                    else
-                    {
-                        Logger.Info("Извлечение фактов: LLM не нашёл фактов для извлечения");
-                    }
-                }
-                else
-                {
-                    Logger.Info("Извлечение фактов: пустой ответ от LLM");
-                }
+                var extractedCount = ParseFactsText(factsText, SaveExtractedFact);
+                Logger.Info($"Извлечение фактов: найдено {extractedCount} факт(ов)");
             }
             else
             {
-                Logger.Warning($"Извлечение фактов: ошибка API HTTP {response.StatusCode}");
+                Logger.Info("Извлечение фактов: LLM не нашёл фактов для извлечения");
             }
-
-            httpClient.Dispose();
         }
         catch (Exception ex)
         {
@@ -1053,7 +998,6 @@ public class ChatAgent
         {
             var token = await _authClient.GetAccessTokenAsync();
 
-            // Формируем текст полного диалога для анализа
             var dialogueText = string.Join("\n", dialogue?.Select(e => $"{e.Role}: {e.Content}") ?? Array.Empty<string>());
 
             var extractionPrompt = $"""
@@ -1065,62 +1009,75 @@ public class ChatAgent
                 {dialogueText}
                 """;
 
-            var extractionMessages = new List<ApiMessage>
-            {
-                new() { Role = "user", Content = extractionPrompt },
-            };
+            var factsText = await CallFactsExtractionApiAsync(token, extractionPrompt);
 
-            var extractionRequest = new Dictionary<string, object>
-            {
-                ["model"] = Model,
-                ["messages"] = extractionMessages.Select(m => new { m.Role, m.Content }).ToList<object>(),
-                ["stream"] = false,
-            };
-
-            var httpClient = new HttpClient();
-            httpClient.DefaultRequestHeaders.Authorization =
-                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
-            httpClient.BaseAddress = new Uri("https://api.giga.chat");
-
-            var response = await httpClient.PostAsJsonAsync("/v1/chat/completions", extractionRequest);
-            httpClient.Dispose();
-
-            if (!response.IsSuccessStatusCode)
-            {
-                Logger.Warning($"Извлечение фактов: ошибка API HTTP {response.StatusCode}");
-                return 0;
-            }
-
-            var parsed = await response.Content.ReadFromJsonAsync<ExtractionResponse>();
-            if (parsed is null || parsed.Choices is null || parsed.Choices.Count == 0) return 0;
-
-            var factsText = parsed.Choices[0].Message?.Content ?? "";
             if (string.IsNullOrWhiteSpace(factsText) || factsText == "нет фактов") return 0;
 
-            var lines = factsText.Split(['\n', '\r'], StringSplitOptions.RemoveEmptyEntries);
-            var extractedCount = 0;
-            foreach (var line in lines)
-            {
-                var trimmed = line.Trim();
-                var colonIndex = trimmed.IndexOf(':');
-                if (colonIndex > 0 && colonIndex < trimmed.Length - 1)
-                {
-                    var key = trimmed[..colonIndex].Trim();
-                    var value = trimmed[(colonIndex + 1)..].Trim();
-                    if (key.Length > 0 && value.Length > 0)
-                    {
-                        SaveExtractedFact(key, value);
-                        extractedCount++;
-                    }
-                }
-            }
-            return extractedCount;
+            return ParseFactsText(factsText, SaveExtractedFact);
         }
         catch (Exception ex)
         {
             Logger.Warning($"Ошибка извлечения фактов: {ex.Message}");
             return 0;
         }
+    }
+
+    /// <summary>
+    /// Вызывает API GigaChat для извлечения фактов из текста.
+    /// </summary>
+    private async Task<string?> CallFactsExtractionApiAsync(string token, string prompt)
+    {
+        var extractionMessages = new List<ApiMessage>
+        {
+            new() { Role = "user", Content = prompt },
+        };
+
+        var extractionRequest = new Dictionary<string, object>
+        {
+            ["model"] = Model,
+            ["messages"] = extractionMessages.Select(m => new { m.Role, m.Content }).ToList<object>(),
+            ["stream"] = false,
+        };
+
+        using var httpClient = new HttpClient();
+        httpClient.DefaultRequestHeaders.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+        httpClient.BaseAddress = new Uri("https://api.giga.chat");
+
+        var response = await httpClient.PostAsJsonAsync("/v1/chat/completions", extractionRequest);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            Logger.Warning($"Извлечение фактов: ошибка API HTTP {response.StatusCode}");
+            return null;
+        }
+
+        var parsed = await response.Content.ReadFromJsonAsync<ExtractionResponse>();
+        return parsed?.Choices?.Count > 0 ? parsed.Choices[0].Message?.Content : null;
+    }
+
+    /// <summary>
+    /// Парсит текст фактов формата "ключ: значение", вызывает callback для каждого.
+    /// </summary>
+    private static int ParseFactsText(string factsText, Action<string, string> saveFact)
+    {
+        var count = 0;
+        foreach (var line in factsText.Split(['\n', '\r'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            var trimmed = line.Trim();
+            var colonIndex = trimmed.IndexOf(':');
+            if (colonIndex > 0 && colonIndex < trimmed.Length - 1)
+            {
+                var key = trimmed[..colonIndex].Trim();
+                var value = trimmed[(colonIndex + 1)..].Trim();
+                if (key.Length > 0 && value.Length > 0)
+                {
+                    saveFact(key, value);
+                    count++;
+                }
+            }
+        }
+        return count;
     }
 
     /// <summary>

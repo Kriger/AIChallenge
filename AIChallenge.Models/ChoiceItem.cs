@@ -1,10 +1,10 @@
 namespace AIChallenge.Models;
 
 /// <summary>
-/// Внутренний класс для десериализации элемента choices ответа API.
+/// Элемент коллекции choices.
 /// </summary>
 public class ChoiceItem
 {
     [JsonPropertyName("message")]
-    public Models.ApiMessage? Message { get; set; }
+    public ApiMessage? Message { get; set; }
 }

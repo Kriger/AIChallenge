@@ -9,7 +9,7 @@ namespace AIChallenge.Core.Infrastructure;
 /// Хранит отдельный блок "facts" (ключ-значение), который обновляется после каждого сообщения.
 /// В запрос отправляется: facts + последние N сообщений.
 /// </summary>
-public class StickyFactsStrategy : IContextStrategy
+public class StickyFactsStrategy : IContextStrategy, IFactStorage
 {
     private readonly ChatClient _chatClient;
     private readonly AuthClient _authClient;
