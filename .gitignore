@@ -35,7 +35,6 @@ Thumbs.db
 ## GigaCode
 .gigacode/
 
-## GigaChatApp data
-GigaChatApp/memory/
-GigaChatApp/profiles/
-GigaChatApp/fsm_state.json
+## Runtime data (CLI)
+AIChallenge.Cli/memory/
+AIChallenge.Cli/fsm_state.json
