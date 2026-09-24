@@ -4,6 +4,7 @@ using AIChallenge.Services;
 using AIChallenge.Core;
 using AIChallenge.Cli.Commands;
 using AIChallenge.Models;
+using AIChallenge.McpScheduler;
 
 using System.Text.Json;
 
@@ -322,6 +323,32 @@ try
                 catch (Exception ex)
                 {
                     Console.WriteLine($"  ⚠️  TodoMCP не подключён: {ex.Message}");
+                }
+            }
+
+            // Scheduled Summary Tool
+            if (mcpTodoService is not null)
+            {
+                try
+                {
+                    var scheduler = new ScheduledSummaryService(
+                        AppDomain.CurrentDomain.BaseDirectory,
+                        msg => Console.WriteLine($"  ℹ️  {msg}"),
+                        async () => await mcpTodoService.CallToolAsync("list_todo_items", null)
+                    );
+
+                    mcpRegistry.Register(new McpToolRegistry.McpToolDefinition(
+                        Name: "scheduled_summary",
+                        Description: "Делает снимок состояния задач и возвращает агрегированный отчёт с diff. Первый вызов создаёт базовый снимок, последующие — отчёт об изменениях.",
+                        ServiceName: "scheduler",
+                        InputSchema: "{\"type\":\"object\",\"properties\":{}}",
+                        Call: async (_) => await scheduler.TakeSnapshotAsync()
+                    ));
+                    Console.WriteLine("  ✅ Scheduled Summary: инструмент зарегистрирован");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"  ⚠️  Scheduled Summary не подключён: {ex.Message}");
                 }
             }
 
