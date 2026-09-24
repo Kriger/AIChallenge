@@ -49,7 +49,7 @@ internal class ShortTermMemoryDto
 /// </summary>
 public static class ShortTermPersistence
 {
-    private const string MemoryDir = "memory/short_term";
+    private static string MemoryDir => Path.Combine(AppContext.BaseDirectory, "memory", "short_term");
     private const string FileName = "entries.json";
 
     private static readonly JsonSerializerOptions Options = new()

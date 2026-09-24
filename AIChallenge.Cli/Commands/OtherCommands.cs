@@ -15,7 +15,7 @@ public sealed class SaveCommand : CommandHandler
         var files = new List<string>();
         ContextPersistence.SaveContext(ctx.Agent);
 
-        var memoryDir = "memory";
+        var memoryDir = Path.Combine(AppContext.BaseDirectory, "memory");
         if (Directory.Exists(memoryDir))
         {
             foreach (var filePath in Directory.GetFiles(memoryDir, "*.json", SearchOption.AllDirectories))

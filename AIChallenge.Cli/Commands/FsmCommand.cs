@@ -382,7 +382,7 @@ public sealed class FsmCommand : CommandHandler
 
     private static async Task ExecuteResume(TaskStateMachine fsm)
     {
-        var resumeFile = "fsm_state.json";
+        var resumeFile = Path.Combine(AppContext.BaseDirectory, "fsm_state.json");
         if (File.Exists(resumeFile))
         {
             var json = File.ReadAllText(resumeFile, Encoding.UTF8);
@@ -553,7 +553,7 @@ public sealed class FsmCommand : CommandHandler
 
     private static async Task ExecutePause(TaskStateMachine fsm)
     {
-        var pauseFile = "fsm_state.json";
+        var pauseFile = Path.Combine(AppContext.BaseDirectory, "fsm_state.json");
         var json = fsm.ToJson();
         File.WriteAllText(pauseFile, json, Encoding.UTF8);
 

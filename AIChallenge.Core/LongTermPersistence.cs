@@ -38,7 +38,7 @@ internal class FactDto
 /// </summary>
 public static class LongTermPersistence
 {
-    private const string MemoryDir = "memory/long_term";
+    private static string MemoryDir => Path.Combine(AppContext.BaseDirectory, "memory", "long_term");
     private const string FileName = "facts.json";
 
     private static readonly JsonSerializerOptions Options = new()

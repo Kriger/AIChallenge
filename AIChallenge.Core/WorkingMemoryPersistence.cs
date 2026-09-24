@@ -61,7 +61,7 @@ internal class WorkingMemoryDto
 /// </summary>
 public static class WorkingMemoryPersistence
 {
-    private const string MemoryDir = "memory/working";
+    private static string MemoryDir => Path.Combine(AppContext.BaseDirectory, "memory", "working");
     private const string FileName = "current.json";
 
     private static readonly JsonSerializerOptions Options = new()

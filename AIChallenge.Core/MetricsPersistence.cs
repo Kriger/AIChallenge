@@ -82,7 +82,7 @@ internal class MetricsDto
 /// </summary>
 public static class MetricsPersistence
 {
-    private const string MemoryDir = "memory";
+    private static string MemoryDir => Path.Combine(AppContext.BaseDirectory, "memory");
     private const string FileName = "metrics.json";
 
     private static readonly JsonSerializerOptions Options = new()

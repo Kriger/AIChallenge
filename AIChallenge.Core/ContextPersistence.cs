@@ -28,7 +28,7 @@ internal class HistoryDto
 /// </summary>
 public static class ContextPersistence
 {
-    private const string MemoryDir = "memory";
+    private static string MemoryDir => Path.Combine(AppContext.BaseDirectory, "memory");
     private const string HistoryFileName = "dialog.json";
     private const string CacheFileName = "cache.json";
     private const string MetricsFileName = "metrics.json";

@@ -67,7 +67,7 @@ internal class AgentProfileDto
 /// </summary>
 public static class AgentProfileManager
 {
-    private const string ProfilesDir = "profiles";
+    private static string ProfilesDir => Path.Combine(AppContext.BaseDirectory, "profiles");
     private const string FileName = "agent_profile.json";
 
     private static readonly JsonSerializerOptions Options = new()

@@ -26,7 +26,7 @@ internal class CachedEntryDto
 /// </summary>
 public static class CachePersistence
 {
-    private const string MemoryDir = "memory";
+    private static string MemoryDir => Path.Combine(AppContext.BaseDirectory, "memory");
     private const string FileName = "cache.json";
 
     private static readonly JsonSerializerOptions Options = new()
