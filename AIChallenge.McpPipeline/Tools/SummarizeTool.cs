@@ -6,31 +6,29 @@ namespace AIChallenge.McpPipeline.Tools;
 
 /// <summary>
 /// Инструмент summarize — обработка данных и генерация отчёта.
-/// Принимает JSON-массив задач и возвращает сводку.
-/// Режимы: stats (статистика), diff (сравнение со снимком), llm (умный отчёт).
 /// </summary>
-public sealed class SummarizeTool : IDisposable
+public sealed class SummarizeTool : IPipelineTool, IDisposable
 {
     private readonly ScheduledSummaryService? _summaryService;
     private readonly LlmSummaryService? _llmService;
     private readonly Action<string> _log;
     private bool _disposed;
-    private readonly string _baseDirectory;
 
+    public string Summary { get; private set; } = "";
     public string Name => "summarize";
     public string Description => "Обработка задач и генерация отчёта. Режимы: stats, diff, llm.";
 
     public SummarizeTool(string? baseDirectory = null, Action<string>? log = null,
         LlmSummaryService? llmService = null)
     {
-        _baseDirectory = baseDirectory ?? AppDomain.CurrentDomain.BaseDirectory;
+        var baseDir = baseDirectory ?? AppDomain.CurrentDomain.BaseDirectory;
         _log = log ?? (msg => Console.WriteLine($"  [summarize] {msg}"));
         _llmService = llmService;
 
         try
         {
             _summaryService = new ScheduledSummaryService(
-                _baseDirectory,
+                baseDir,
                 msg => _log(msg),
                 () => Task.FromResult("[]")
             );
@@ -41,25 +39,17 @@ public sealed class SummarizeTool : IDisposable
         }
     }
 
-    /// <summary>
-    /// Выполняет суммаризацию.
-    /// Параметры: tasksJson (string), mode (string? = "stats"), previousSummary (string?)
-    /// Возвращает: отчёт (string).
-    /// </summary>
     public async Task<string> ExecuteAsync(Dictionary<string, object?> parameters)
     {
         if (_disposed)
             throw new ObjectDisposedException(nameof(SummarizeTool));
 
-        // Получаем JSON задач
         if (!parameters.TryGetValue("tasksJson", out var tasksJsonObj) || tasksJsonObj == null)
-        {
             return "{\"error\": \"Отсутствует параметр tasksJson\"}";
-        }
 
         var tasksJson = tasksJsonObj.ToString() ?? "[]";
         var mode = parameters.TryGetValue("mode", out var modeObj)
-            ? (modeObj.ToString()?.ToLowerInvariant() ?? "stats")
+            ? (modeObj?.ToString()?.ToLowerInvariant() ?? "stats")
             : "stats";
         var previousSummary = parameters.TryGetValue("previousSummary", out var prevObj)
             ? prevObj?.ToString()
@@ -72,28 +62,20 @@ public sealed class SummarizeTool : IDisposable
             "llm" when _llmService != null => await SummarizeWithLlmAsync(tasksJson, previousSummary),
             "llm" => await SummarizeWithLlmFallbackAsync(tasksJson),
             "diff" => await SummarizeDiffAsync(tasksJson),
-            "stats" or _ => SummarizeStatsAsync(tasksJson),
+            _ => SummarizeStatsAsync(tasksJson)
         };
     }
 
-    /// <summary>
-    /// LLM-суммаризация через GigaChat.
-    /// </summary>
     private async Task<string> SummarizeWithLlmAsync(string tasksJson, string? previousSummary)
     {
         try
         {
-            string result;
-            if (previousSummary != null)
-            {
-                result = await _llmService!.GenerateDiffSummaryAsync(tasksJson, previousSummary);
-                _log("✅ LLM-отчёт с учётом предыдущего состояния");
-            }
-            else
-            {
-                result = await _llmService!.GenerateSummaryAsync(tasksJson);
-                _log("✅ LLM-отчёт (первый запуск)");
-            }
+            var result = previousSummary != null
+                ? await _llmService!.GenerateDiffSummaryAsync(tasksJson, previousSummary)
+                : await _llmService!.GenerateSummaryAsync(tasksJson);
+
+            _log("✅ LLM-отчёт сформирован");
+            Summary = result;
             return result;
         }
         catch (Exception ex)
@@ -103,9 +85,6 @@ public sealed class SummarizeTool : IDisposable
         }
     }
 
-    /// <summary>
-    /// Fallback для LLM — используем ScheduledSummaryService.
-    /// </summary>
     private async Task<string> SummarizeWithLlmFallbackAsync(string tasksJson)
     {
         try
@@ -114,6 +93,7 @@ public sealed class SummarizeTool : IDisposable
             {
                 var result = await _summaryService.TakeSnapshotAsync();
                 _log("✅ Отчёт через ScheduledSummaryService");
+                Summary = result;
                 return result;
             }
         }
@@ -121,13 +101,9 @@ public sealed class SummarizeTool : IDisposable
         {
             _log($"❌ Ошибка fallback: {ex.Message}");
         }
-
         return GenerateBasicSummary(tasksJson);
     }
 
-    /// <summary>
-    /// Diff-суммаризация — сравнение с предыдущим снимком.
-    /// </summary>
     private async Task<string> SummarizeDiffAsync(string tasksJson)
     {
         try
@@ -136,6 +112,7 @@ public sealed class SummarizeTool : IDisposable
             {
                 var result = await _summaryService.TakeSnapshotAsync();
                 _log("✅ Diff-отчёт");
+                Summary = result;
                 return result;
             }
         }
@@ -143,43 +120,35 @@ public sealed class SummarizeTool : IDisposable
         {
             _log($"❌ Ошибка diff: {ex.Message}");
         }
-
         return GenerateBasicSummary(tasksJson);
     }
 
-    /// <summary>
-    /// Статистическая суммаризация — без вызова внешних сервисов.
-    /// </summary>
     private string SummarizeStatsAsync(string tasksJson)
     {
         try
         {
             using var doc = JsonDocument.Parse(tasksJson);
-            var root = doc.RootElement;
-
-            if (root.ValueKind != JsonValueKind.Array)
-            {
+            if (doc.RootElement.ValueKind != JsonValueKind.Array)
                 return "{\"error\": \"Ожидается JSON-массив\"}";
-            }
 
             var totalCount = 0;
             var completedCount = 0;
-            var pendingCount = 0;
             var byProject = new Dictionary<string, int>();
             var byPriority = new Dictionary<string, int>();
             var completedTitles = new List<string>();
             var pendingTitles = new List<string>();
 
-            foreach (var task in root.EnumerateArray())
+            foreach (var task in doc.RootElement.EnumerateArray())
             {
                 totalCount++;
 
-                var title = ExtractString(task, "Title", "title", "Название", "name", "Subject");
-                var isCompleted = ExtractString(task, "IsCompleted", "isCompleted", "Status", "status", "Статус");
-                var project = ExtractString(task, "ProjectTitle", "projectTitle", "Project", "project");
-                var priority = ExtractString(task, "Priority", "priority");
+                var title = JsonUtils.ExtractString(task, "Title", "title", "Название", "name", "Subject");
+                var isCompleted = JsonUtils.ExtractString(task, "IsCompleted", "isCompleted", "Status", "status", "Статус");
+                var project = JsonUtils.ExtractString(task, "ProjectTitle", "projectTitle", "Project", "project");
+                var rawPriority = JsonUtils.ExtractString(task, "Priority", "priority");
+                var priority = MapPriorityToLabel(rawPriority);
 
-                bool completed = !string.IsNullOrEmpty(isCompleted) &&
+                var completed = !string.IsNullOrEmpty(isCompleted) &&
                     (isCompleted.Equals("true", StringComparison.OrdinalIgnoreCase) ||
                      isCompleted.Equals("да", StringComparison.OrdinalIgnoreCase) ||
                      isCompleted.Equals("выполнена", StringComparison.OrdinalIgnoreCase) ||
@@ -191,32 +160,25 @@ public sealed class SummarizeTool : IDisposable
                     completedCount++;
                     if (!string.IsNullOrEmpty(title)) completedTitles.Add(title);
                 }
-                else
+                else if (!string.IsNullOrEmpty(title))
                 {
-                    pendingCount++;
-                    if (!string.IsNullOrEmpty(title)) pendingTitles.Add(title);
+                    pendingTitles.Add(title);
                 }
 
-                if (!string.IsNullOrEmpty(project))
-                {
-                    if (!byProject.TryGetValue(project, out var c)) byProject[project] = 0;
-                    byProject[project]++;
-                }
+                var projKey = string.IsNullOrEmpty(project) ? "Без проекта" : project;
+                if (!byProject.TryGetValue(projKey, out var pc)) byProject[projKey] = 0;
+                byProject[projKey]++;
 
-                if (!string.IsNullOrEmpty(priority))
-                {
-                    if (!byPriority.TryGetValue(priority, out var p)) byPriority[priority] = 0;
-                    byPriority[priority]++;
-                }
+                var priKey = string.IsNullOrEmpty(priority) ? "Без приоритета" : priority;
+                if (!byPriority.TryGetValue(priKey, out var ppc)) byPriority[priKey] = 0;
+                byPriority[priKey]++;
             }
-
-            var percent = totalCount > 0 ? (int)((double)completedCount / totalCount * 100) : 0;
 
             var sb = new StringBuilder();
             sb.AppendLine("📊 Сводка задач:");
             sb.AppendLine($"   Всего: {totalCount}");
-            sb.AppendLine($"   ✅ Выполнено: {completedCount} ({percent}%)");
-            sb.AppendLine($"   ⏳ Ожидает: {pendingCount}");
+            sb.AppendLine($"   ✅ Выполнено: {completedCount} ({GetPercent(completedCount, totalCount)}%)");
+            sb.AppendLine($"   ⏳ Ожидает: {totalCount - completedCount}");
             sb.AppendLine();
 
             if (byProject.Count > 0)
@@ -255,7 +217,8 @@ public sealed class SummarizeTool : IDisposable
             }
 
             _log("✅ Статистика сформирована");
-            return sb.ToString();
+            Summary = sb.ToString();
+            return Summary;
         }
         catch (Exception ex)
         {
@@ -269,8 +232,7 @@ public sealed class SummarizeTool : IDisposable
         try
         {
             using var doc = JsonDocument.Parse(tasksJson);
-            var root = doc.RootElement;
-            var count = root.ValueKind == JsonValueKind.Array ? root.GetArrayLength() : 0;
+            var count = doc.RootElement.ValueKind == JsonValueKind.Array ? doc.RootElement.GetArrayLength() : 0;
             return $"📊 Всего задач: {count}\n   Статистика сгенерирована.";
         }
         catch
@@ -279,31 +241,27 @@ public sealed class SummarizeTool : IDisposable
         }
     }
 
-    private static string? ExtractString(JsonElement element, params string[] propertyNames)
+    private static string MapPriorityToLabel(string? rawPriority)
     {
-        foreach (var name in propertyNames)
+        if (string.IsNullOrEmpty(rawPriority))
+            return "Без приоритета";
+        if (!int.TryParse(rawPriority, out var num))
+            return rawPriority;
+
+        return num switch
         {
-            if (element.TryGetProperty(name, out var prop))
-            {
-                return prop.ValueKind switch
-                {
-                    JsonValueKind.String => prop.GetString(),
-                    JsonValueKind.Number => prop.GetInt32().ToString(),
-                    JsonValueKind.True or JsonValueKind.False => prop.GetBoolean().ToString().ToLowerInvariant(),
-                    JsonValueKind.Null => null,
-                    _ => prop.ToString()
-                };
-            }
-        }
-        return null;
+            1 => "Низкий", 2 => "Базовый", 3 => "Высокий",
+            4 => "Очень высокий", 5 => "Критический",
+            _ => rawPriority
+        };
     }
+
+    private static int GetPercent(int part, int total) => total == 0 ? 0 : (int)((double)part / total * 100);
 
     public void Dispose()
     {
-        if (!_disposed)
-        {
-            (_llmService as IDisposable)?.Dispose();
-            _disposed = true;
-        }
+        if (_disposed) return;
+        (_llmService as IDisposable)?.Dispose();
+        _disposed = true;
     }
 }

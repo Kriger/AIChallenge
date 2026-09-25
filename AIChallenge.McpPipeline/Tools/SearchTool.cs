@@ -1,18 +1,20 @@
+using AIChallenge.Models;
 using AIChallenge.Services;
 using Microsoft.Extensions.Configuration;
+using System.Text.Json;
 
 namespace AIChallenge.McpPipeline.Tools;
 
 /// <summary>
 /// Инструмент search — получение данных из MCP-сервера.
-/// Подключается к TodoMCP и возвращает задачи в формате JSON.
 /// </summary>
-public sealed class SearchTool : IDisposable
+public sealed class SearchTool : IPipelineTool, IDisposable
 {
     private readonly McpTodoService? _mcpService;
     private readonly Action<string> _log;
     private bool _disposed;
 
+    public string Summary { get; private set; } = "";
     public string Name => "search";
     public string Description => "Получение задач из MCP-сервера. Возвращает JSON-массив задач с фильтрацией.";
 
@@ -25,7 +27,13 @@ public sealed class SearchTool : IDisposable
             try
             {
                 _mcpService = new McpTodoService(
-                    (msg, level) => _log($"[{level}] {msg}"),
+                    (msg, level) =>
+                    {
+                        if (level == LogLevel.Warning && msg.Contains("Конфигурация"))
+                            return;
+                        if (level == LogLevel.Error)
+                            _log($"❌ {msg}");
+                    },
                     configuration
                 );
             }
@@ -36,11 +44,6 @@ public sealed class SearchTool : IDisposable
         }
     }
 
-    /// <summary>
-    /// Выполняет поиск задач.
-    /// Параметры: project (string?), status (string?), limit (int?)
-    /// Возвращает: JSON-массив задач.
-    /// </summary>
     public async Task<string> ExecuteAsync(Dictionary<string, object?> parameters)
     {
         if (_disposed)
@@ -50,104 +53,130 @@ public sealed class SearchTool : IDisposable
 
         if (_mcpService == null)
         {
-            // Fallback: возвращаем тестовые данные
-            return GetFallbackData();
+            var fallback = GetFallbackData();
+            Summary = "Тестовые данные (MCP не подключён)";
+            return fallback;
         }
 
         try
         {
-            // Подключаемся к MCP
             if (!_mcpService.IsConnected)
-            {
                 await _mcpService.ConnectAsync();
-            }
 
-            // Если подключение не удалось — используем fallback
             if (!_mcpService.IsConnected)
             {
                 _log("⚠️ MCP не подключён, используем тестовые данные");
+                Summary = "Тестовые данные (MCP не подключён)";
                 return GetFallbackData();
             }
 
-            // Формируем аргументы для MCP
-            var args = new Dictionary<string, object?>();
-
-            if (parameters.TryGetValue("project", out var project) && project != null)
-            {
-                args["projectTitle"] = project.ToString();
-                _log($"   Фильтр по проекту: {project}");
-            }
-
-            if (parameters.TryGetValue("status", out var status) && status != null)
-            {
-                var statusStr = status.ToString()?.ToLowerInvariant();
-                if (statusStr == "completed" || statusStr == "выполн")
-                {
-                    args["isCompleted"] = true;
-                    _log("   Фильтр: выполненные задачи");
-                }
-                else if (statusStr == "pending" || statusStr == "ожидает")
-                {
-                    args["isCompleted"] = false;
-                    _log("   Фильтр: ожидающие задачи");
-                }
-            }
-
-            if (parameters.TryGetValue("limit", out var limit) && limit != null)
-            {
-                if (int.TryParse(limit.ToString(), out var parsedLimit) && parsedLimit > 0)
-                {
-                    args["limit"] = parsedLimit;
-                    _log($"   Лимит: {parsedLimit}");
-                }
-            }
-
-            // Вызываем MCP
+            var args = BuildArgs(parameters);
             var result = await _mcpService.CallToolAsync("list_todo_items", args);
 
-            // Фильтруем по лимиту, если нужно
-            if (args.ContainsKey("limit") && result.StartsWith("["))
+            if (args.TryGetValue("limit", out var limitVal) && result.StartsWith("["))
             {
-                try
-                {
-                    using var doc = System.Text.Json.JsonDocument.Parse(result);
-                    var array = doc.RootElement;
-                    if (array.ValueKind == System.Text.Json.JsonValueKind.Array)
-                    {
-                        var count = array.GetArrayLength();
-                        if (count > (int)args["limit"]!)
-                        {
-                            var options = new System.Text.Json.JsonSerializerOptions
-                            {
-                                WriteIndented = true,
-                                Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
-                            };
-                            var sliced = new System.Text.Json.JsonElement[count];
-                            var idx = 0;
-                            foreach (var item in array.EnumerateArray())
-                            {
-                                if (idx >= (int)args["limit"]!) break;
-                                sliced[idx++] = item.Clone();
-                            }
-                            var arr = System.Text.Json.JsonSerializer.Serialize(sliced[..idx], options);
-                            _log($"   Отфильтровано до {idx} задач");
-                            return arr;
-                        }
-                    }
-                }
-                catch
-                {
-                    // Не фильтруем при ошибке
-                }
+                result = ApplyLimit(result, (int)limitVal!);
             }
 
-            _log($"✅ Найдено задач");
-            return result;
+            var stats = ExtractStats(result);
+            Summary = $"Найдено задач: {stats.TaskCount}, проектов: {stats.ProjectCount}";
+            _log($"✅ {Summary}");
+
+            return JsonUtils.FormatJson(result);
         }
         catch (Exception ex)
         {
             _log($"❌ Ошибка поиска: {ex.Message}");
+            Summary = $"Ошибка: {ex.Message}";
             return $"{{\"error\": \"{ex.Message}\"}}";
+        }
+    }
+
+    private Dictionary<string, object?> BuildArgs(Dictionary<string, object?> parameters)
+    {
+        var args = new Dictionary<string, object?>();
+
+        if (parameters.TryGetValue("project", out var project) && project != null)
+        {
+            args["projectTitle"] = project.ToString();
+            _log($"   Фильтр по проекту: {project}");
+        }
+
+        if (parameters.TryGetValue("status", out var status) && status != null)
+        {
+            var statusStr = status.ToString()?.ToLowerInvariant();
+            if (statusStr == "completed" || statusStr == "выполн")
+            {
+                args["isCompleted"] = true;
+                _log("   Фильтр: выполненные задачи");
+            }
+            else if (statusStr == "pending" || statusStr == "ожидает")
+            {
+                args["isCompleted"] = false;
+                _log("   Фильтр: ожидающие задачи");
+            }
+        }
+
+        if (parameters.TryGetValue("limit", out var limit) && limit != null)
+        {
+            if (int.TryParse(limit.ToString(), out var parsedLimit) && parsedLimit > 0)
+            {
+                args["limit"] = parsedLimit;
+                _log($"   Лимит: {parsedLimit}");
+            }
+        }
+
+        return args;
+    }
+
+    private string ApplyLimit(string json, int limit)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var array = doc.RootElement;
+            if (array.ValueKind != JsonValueKind.Array)
+                return json;
+
+            var count = array.GetArrayLength();
+            if (count <= limit)
+                return json;
+
+            var elements = array.EnumerateArray().Take(limit).Select(e => e.Clone()).ToList();
+            var options = new JsonSerializerOptions
+            {
+                WriteIndented = true,
+                Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+            };
+            _log($"   Отфильтровано до {limit} задач");
+            return JsonSerializer.Serialize(elements.ToArray(), options);
+        }
+        catch
+        {
+            return json;
+        }
+    }
+
+    private (int TaskCount, int ProjectCount) ExtractStats(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var taskCount = doc.RootElement.GetArrayLength();
+            var projects = new HashSet<string>();
+
+            foreach (var task in doc.RootElement.EnumerateArray())
+            {
+                var proj = JsonUtils.ExtractString(task, "ProjectTitle", "projectTitle", "Project", "project");
+                if (!string.IsNullOrEmpty(proj))
+                    projects.Add(proj);
+            }
+
+            return (taskCount, projects.Count);
+        }
+        catch
+        {
+            return (0, 0);
         }
     }
 
@@ -163,46 +192,14 @@ public sealed class SearchTool : IDisposable
             """;
     }
 
-    public async ValueTask DisposeAsync()
-    {
-        if (!_disposed)
-        {
-            var service = _mcpService;
-            if (service != null)
-            {
-                var asyncDisp = service as IAsyncDisposable;
-                if (asyncDisp != null)
-                {
-                    await asyncDisp.DisposeAsync();
-                }
-            }
-            _disposed = true;
-        }
-    }
-
     public void Dispose()
     {
-        if (!_disposed)
+        if (_disposed) return;
+
+        if (_mcpService is IAsyncDisposable asyncDisp)
         {
-            var service = _mcpService;
-            if (service != null)
-            {
-                var asyncDisp = service as IAsyncDisposable;
-                if (asyncDisp != null)
-                {
-                    // IAsyncDisposable не имеет синхронного Dispose,
-                    // но мы можем вызвать DisposeAsync и подождать
-                    try
-                    {
-                        asyncDisp.DisposeAsync().AsTask().Wait(1000);
-                    }
-                    catch
-                    {
-                        // Игнорируем таймауты при диспоузе
-                    }
-                }
-            }
-            _disposed = true;
+            try { asyncDisp.DisposeAsync().AsTask().Wait(1000); } catch { }
         }
+        _disposed = true;
     }
 }

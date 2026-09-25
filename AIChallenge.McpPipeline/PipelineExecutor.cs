@@ -1,4 +1,5 @@
 using AIChallenge.McpPipeline.Tools;
+using AIChallenge.McpScheduler;
 using Microsoft.Extensions.Configuration;
 
 namespace AIChallenge.McpPipeline;
@@ -28,9 +29,7 @@ public record PipelineStep(
 /// </summary>
 public sealed class PipelineExecutor : IDisposable
 {
-    private readonly SearchTool? _searchTool;
-    private readonly SummarizeTool? _summarizeTool;
-    private readonly SaveToFileTool? _saveToFileTool;
+    private readonly Dictionary<string, IPipelineTool> _tools;
     private readonly Action<string> _log;
     private readonly Dictionary<string, string> _stepResults;
     private bool _disposed;
@@ -39,22 +38,27 @@ public sealed class PipelineExecutor : IDisposable
         IConfiguration? configuration = null,
         string? baseDirectory = null,
         Action<string>? log = null,
-        McpScheduler.LlmSummaryService? llmService = null)
+        LlmSummaryService? llmService = null)
     {
         _log = log ?? (msg => Console.WriteLine($"  [pipeline] {msg}"));
         _stepResults = new Dictionary<string, string>();
 
-        _searchTool = configuration != null
-            ? new SearchTool(configuration, msg => _log(msg))
-            : new SearchTool(log: msg => _log(msg));
+        _tools = new Dictionary<string, IPipelineTool>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["search"] = configuration != null
+                ? new SearchTool(configuration, msg => _log(msg))
+                : new SearchTool(log: msg => _log(msg)),
 
-        _summarizeTool = new SummarizeTool(
-            baseDirectory ?? AppDomain.CurrentDomain.BaseDirectory,
-            msg => _log(msg),
-            llmService
-        );
+            ["enrich"] = new EnrichTool(llmService, msg => _log(msg)),
 
-        _saveToFileTool = new SaveToFileTool(msg => _log(msg));
+            ["summarize"] = new SummarizeTool(
+                baseDirectory ?? AppDomain.CurrentDomain.BaseDirectory,
+                msg => _log(msg),
+                llmService
+            ),
+
+            ["savetofile"] = new SaveToFileTool(msg => _log(msg))
+        };
     }
 
     /// <summary>
@@ -76,51 +80,32 @@ public sealed class PipelineExecutor : IDisposable
             {
                 if (cancellationToken.IsCancellationRequested)
                 {
-                    return new PipelineResult(
-                        Success: false,
-                        Output: "Пайплайн отменён",
-                        StepResults: new Dictionary<string, string>(_stepResults),
-                        Duration: stopwatch.Elapsed,
-                        Error: "Cancelled"
-                    );
+                    return CreateCancelledResult(stopwatch);
+                }
+
+                if (!_tools.TryGetValue(step.ToolName, out var tool))
+                {
+                    throw new InvalidOperationException($"Неизвестный инструмент: '{step.ToolName}'. Доступны: {string.Join(", ", _tools.Keys)}");
                 }
 
                 _log($"━━━ Шаг: {step.ToolName} ━━━");
 
-                // Копируем параметры, добавляя результат предыдущего шага
                 var parameters = new Dictionary<string, object?>(step.Parameters);
+                AutoWireResult(parameters, lastOutput, step.ToolName);
 
-                // Если это не первый шаг — передаём результат предыдущего
-                if (lastOutput != null && !parameters.ContainsKey("tasksJson"))
-                {
-                    // Для SummarizeTool: передаём как tasksJson
-                    if (step.ToolName.Equals("summarize", StringComparison.OrdinalIgnoreCase))
-                    {
-                        parameters["tasksJson"] = lastOutput;
-                    }
-                    // Для SaveToFileTool: передаём как content
-                    else if (step.ToolName.Equals("saveToFile", StringComparison.OrdinalIgnoreCase))
-                    {
-                        parameters["content"] = lastOutput;
-                    }
-                }
-
-                // Выполняем шаг
-                var result = await ExecuteStepAsync(step.ToolName, parameters, cancellationToken);
-                _stepResults[step.ToolName] = result;
+                var result = await ExecuteToolAsync(tool, parameters);
+                _stepResults[step.ToolName] = tool.Summary;
                 lastOutput = result;
 
                 _log($"   ✅ Результат: {result.Length} символов");
             }
 
-            var finalResult = lastOutput ?? string.Empty;
             stopwatch.Stop();
-
             _log($"🏁 Пайплайн завершён за {stopwatch.Elapsed.TotalMilliseconds:F0}мс");
 
             return new PipelineResult(
                 Success: true,
-                Output: finalResult,
+                Output: lastOutput ?? string.Empty,
                 StepResults: new Dictionary<string, string>(_stepResults),
                 Duration: stopwatch.Elapsed
             );
@@ -140,115 +125,110 @@ public sealed class PipelineExecutor : IDisposable
         }
     }
 
-    /// <summary>
-    /// Выполняет один шаг пайплайна.
-    /// </summary>
-    private async Task<string> ExecuteStepAsync(string toolName, Dictionary<string, object?> parameters, CancellationToken cancellationToken)
+    private static void AutoWireResult(Dictionary<string, object?> parameters, string? lastOutput, string currentTool)
     {
-        var normalizedToolName = toolName.Trim().ToLowerInvariant();
-        _log($"   Инструмент: '{normalizedToolName}'");
+        if (lastOutput == null || parameters.ContainsKey("tasksJson"))
+            return;
 
-        return normalizedToolName switch
-        {
-            "search" => await _searchTool!.ExecuteAsync(parameters),
-            "summarize" => await _summarizeTool!.ExecuteAsync(parameters),
-            "savetofile" => _saveToFileTool!.Execute(parameters),
-            _ => throw new InvalidOperationException($"Неизвестный инструмент: '{toolName}'")
-        };
+        if (currentTool is "summarize" or "enrich")
+            parameters["tasksJson"] = lastOutput;
+        else if (currentTool == "saveToFile")
+            parameters["content"] = lastOutput;
     }
 
-    /// <summary>
-    /// Стандартный пайплайн: search → summarize → saveToFile.
-    /// </summary>
+    private static async Task<string> ExecuteToolAsync(IPipelineTool tool, Dictionary<string, object?> parameters)
+    {
+        return await tool.ExecuteAsync(parameters);
+    }
+
+    private static PipelineResult CreateCancelledResult(System.Diagnostics.Stopwatch stopwatch) =>
+        new(
+            Success: false,
+            Output: "Пайплайн отменён",
+            StepResults: new Dictionary<string, string>(),
+            Duration: stopwatch.Elapsed,
+            Error: "Cancelled"
+        );
+
+    // ─── Готовые пайплайны ───────────────────────────────────────────────
+
     public async Task<PipelineResult> RunStandardPipelineAsync(
         string outputPath,
         string summarizeMode = "stats",
         CancellationToken cancellationToken = default)
     {
-        var steps = new[]
-        {
-            new PipelineStep(
-                "search",
-                new Dictionary<string, object?>()
-            ),
-            new PipelineStep(
-                "summarize",
-                new Dictionary<string, object?>
-                {
-                    ["mode"] = summarizeMode
-                }
-            ),
-            new PipelineStep(
-                "saveToFile",
-                new Dictionary<string, object?>
-                {
-                    ["path"] = outputPath,
-                    ["format"] = "text"
-                }
-            )
-        };
-
-        return await ExecuteAsync(steps, cancellationToken);
+        return await ExecuteAsync(StandardPipelineSteps(outputPath, summarizeMode), cancellationToken);
     }
 
-    /// <summary>
-    /// Пайплайн с LLM-суммаризацией.
-    /// </summary>
     public async Task<PipelineResult> RunLlmPipelineAsync(
         string outputPath,
         CancellationToken cancellationToken = default)
     {
-        var steps = new[]
-        {
-            new PipelineStep(
-                "search",
-                new Dictionary<string, object?>()
-            ),
-            new PipelineStep(
-                "summarize",
-                new Dictionary<string, object?>
-                {
-                    ["mode"] = "llm"
-                }
-            ),
-            new PipelineStep(
-                "saveToFile",
-                new Dictionary<string, object?>
-                {
-                    ["path"] = outputPath,
-                    ["format"] = "markdown"
-                }
-            )
-        };
-
-        return await ExecuteAsync(steps, cancellationToken);
+        return await ExecuteAsync(LlmPipelineSteps(outputPath), cancellationToken);
     }
 
-    /// <summary>
-    /// Пайплайн только для поиска и сохранения.
-    /// </summary>
     public async Task<PipelineResult> RunSearchSavePipelineAsync(
         string outputPath,
         CancellationToken cancellationToken = default)
     {
-        var steps = new[]
-        {
-            new PipelineStep(
-                "search",
-                new Dictionary<string, object?>()
-            ),
-            new PipelineStep(
-                "saveToFile",
-                new Dictionary<string, object?>
-                {
-                    ["path"] = outputPath,
-                    ["format"] = "json"
-                }
-            )
-        };
-
-        return await ExecuteAsync(steps, cancellationToken);
+        return await ExecuteAsync(SearchSavePipelineSteps(outputPath), cancellationToken);
     }
+
+    public async Task<PipelineResult> RunFullPipelineAsync(
+        string outputPath,
+        string summarizeMode = "stats",
+        CancellationToken cancellationToken = default)
+    {
+        return await ExecuteAsync(FullPipelineSteps(outputPath, summarizeMode), cancellationToken);
+    }
+
+    public async Task<PipelineResult> RunFullLlmPipelineAsync(
+        string outputPath,
+        CancellationToken cancellationToken = default)
+    {
+        return await ExecuteAsync(FullLlmPipelineSteps(outputPath), cancellationToken);
+    }
+
+    // ─── Фабрики шагов ───────────────────────────────────────────────────
+
+    private static IEnumerable<PipelineStep> StandardPipelineSteps(string outputPath, string mode) => new[]
+    {
+        Step("search", new Dictionary<string, object?>()),
+        Step("summarize", new Dictionary<string, object?> { ["mode"] = mode }),
+        Step("saveToFile", new Dictionary<string, object?> { ["path"] = outputPath, ["format"] = "text" })
+    };
+
+    private static IEnumerable<PipelineStep> LlmPipelineSteps(string outputPath) => new[]
+    {
+        Step("search", new Dictionary<string, object?>()),
+        Step("summarize", new Dictionary<string, object?> { ["mode"] = "llm" }),
+        Step("saveToFile", new Dictionary<string, object?> { ["path"] = outputPath, ["format"] = "markdown" })
+    };
+
+    private static IEnumerable<PipelineStep> SearchSavePipelineSteps(string outputPath) => new[]
+    {
+        Step("search", new Dictionary<string, object?>()),
+        Step("saveToFile", new Dictionary<string, object?> { ["path"] = outputPath, ["format"] = "json" })
+    };
+
+    private static IEnumerable<PipelineStep> FullPipelineSteps(string outputPath, string mode) => new[]
+    {
+        Step("search", new Dictionary<string, object?>()),
+        Step("enrich", new Dictionary<string, object?> { ["mode"] = "both" }),
+        Step("summarize", new Dictionary<string, object?> { ["mode"] = mode }),
+        Step("saveToFile", new Dictionary<string, object?> { ["path"] = outputPath, ["format"] = "text" })
+    };
+
+    private static IEnumerable<PipelineStep> FullLlmPipelineSteps(string outputPath) => new[]
+    {
+        Step("search", new Dictionary<string, object?>()),
+        Step("enrich", new Dictionary<string, object?> { ["mode"] = "prioritize" }),
+        Step("summarize", new Dictionary<string, object?> { ["mode"] = "llm" }),
+        Step("saveToFile", new Dictionary<string, object?> { ["path"] = outputPath, ["format"] = "markdown" })
+    };
+
+    private static PipelineStep Step(string name, Dictionary<string, object?> parameters) =>
+        new(name, parameters);
 
     /// <summary>
     /// Получает результаты всех шагов.
@@ -257,11 +237,12 @@ public sealed class PipelineExecutor : IDisposable
 
     public void Dispose()
     {
-        if (!_disposed)
+        if (_disposed) return;
+        foreach (var tool in _tools.Values)
         {
-            (_searchTool as IDisposable)?.Dispose();
-            (_summarizeTool as IDisposable)?.Dispose();
-            _disposed = true;
+            if (tool is IDisposable disposable)
+                disposable.Dispose();
         }
+        _disposed = true;
     }
 }
