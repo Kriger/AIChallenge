@@ -17,6 +17,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AIChallenge.McpScheduler", 
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AIChallenge.ScheduledSummary.Cli", "AIChallenge.ScheduledSummary.Cli\AIChallenge.ScheduledSummary.Cli.csproj", "{F94ACCD7-97B5-43C1-AEC0-FE232D153AD9}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AIChallenge.McpPipeline", "AIChallenge.McpPipeline\AIChallenge.McpPipeline.csproj", "{A8B3C7D2-E5F1-4A9B-8C6D-2E7F1A3B5C9D}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -111,6 +113,18 @@ Global
 		{F94ACCD7-97B5-43C1-AEC0-FE232D153AD9}.Release|x64.Build.0 = Release|Any CPU
 		{F94ACCD7-97B5-43C1-AEC0-FE232D153AD9}.Release|x86.ActiveCfg = Release|Any CPU
 		{F94ACCD7-97B5-43C1-AEC0-FE232D153AD9}.Release|x86.Build.0 = Release|Any CPU
+		{A8B3C7D2-E5F1-4A9B-8C6D-2E7F1A3B5C9D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A8B3C7D2-E5F1-4A9B-8C6D-2E7F1A3B5C9D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A8B3C7D2-E5F1-4A9B-8C6D-2E7F1A3B5C9D}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{A8B3C7D2-E5F1-4A9B-8C6D-2E7F1A3B5C9D}.Debug|x64.Build.0 = Debug|Any CPU
+		{A8B3C7D2-E5F1-4A9B-8C6D-2E7F1A3B5C9D}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{A8B3C7D2-E5F1-4A9B-8C6D-2E7F1A3B5C9D}.Debug|x86.Build.0 = Debug|Any CPU
+		{A8B3C7D2-E5F1-4A9B-8C6D-2E7F1A3B5C9D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A8B3C7D2-E5F1-4A9B-8C6D-2E7F1A3B5C9D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A8B3C7D2-E5F1-4A9B-8C6D-2E7F1A3B5C9D}.Release|x64.ActiveCfg = Release|Any CPU
+		{A8B3C7D2-E5F1-4A9B-8C6D-2E7F1A3B5C9D}.Release|x64.Build.0 = Release|Any CPU
+		{A8B3C7D2-E5F1-4A9B-8C6D-2E7F1A3B5C9D}.Release|x86.ActiveCfg = Release|Any CPU
+		{A8B3C7D2-E5F1-4A9B-8C6D-2E7F1A3B5C9D}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
