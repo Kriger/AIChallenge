@@ -1,5 +1,7 @@
 using AIChallenge.McpPipeline.Tools;
 using AIChallenge.McpScheduler;
+using AIChallenge.Models;
+using AIChallenge.Services;
 using Microsoft.Extensions.Configuration;
 
 namespace AIChallenge.McpPipeline;
@@ -30,6 +32,7 @@ public record PipelineStep(
 public sealed class PipelineExecutor : IDisposable
 {
     private readonly Dictionary<string, IPipelineTool> _tools;
+    private readonly McpTodoService? _mcpService;
     private readonly Action<string> _log;
     private readonly Dictionary<string, string> _stepResults;
     private bool _disposed;
@@ -43,13 +46,35 @@ public sealed class PipelineExecutor : IDisposable
         _log = log ?? (msg => Console.WriteLine($"  [pipeline] {msg}"));
         _stepResults = new Dictionary<string, string>();
 
+        // Создаём McpTodoService один раз и передаём в SearchTool и EnrichTool
+        McpTodoService? mcpService = null;
+        if (configuration != null)
+        {
+            try
+            {
+                mcpService = new McpTodoService(
+                    (msg, level) =>
+                    {
+                        if (level == LogLevel.Warning && msg.Contains("Конфигурация"))
+                            return;
+                        if (level == LogLevel.Error)
+                            _log($"❌ {msg}");
+                    },
+                    configuration
+                );
+            }
+            catch (Exception ex)
+            {
+                _log($"⚠️ Не удалось создать McpTodoService: {ex.Message}");
+            }
+        }
+
+        _mcpService = mcpService;
+
         _tools = new Dictionary<string, IPipelineTool>(StringComparer.OrdinalIgnoreCase)
         {
-            ["search"] = configuration != null
-                ? new SearchTool(configuration, msg => _log(msg))
-                : new SearchTool(log: msg => _log(msg)),
-
-            ["enrich"] = new EnrichTool(llmService, msg => _log(msg)),
+            ["search"] = new SearchTool(mcpService, msg => _log(msg)),
+            ["enrich"] = new EnrichTool(llmService, mcpService, msg => _log(msg)),
 
             ["summarize"] = new SummarizeTool(
                 baseDirectory ?? AppDomain.CurrentDomain.BaseDirectory,
@@ -214,7 +239,7 @@ public sealed class PipelineExecutor : IDisposable
     private static IEnumerable<PipelineStep> FullPipelineSteps(string outputPath, string mode) => new[]
     {
         Step("search", new Dictionary<string, object?>()),
-        Step("enrich", new Dictionary<string, object?> { ["mode"] = "both" }),
+        Step("enrich", new Dictionary<string, object?> { ["mode"] = "both", ["applyChanges"] = true }),
         Step("summarize", new Dictionary<string, object?> { ["mode"] = mode }),
         Step("saveToFile", new Dictionary<string, object?> { ["path"] = outputPath, ["format"] = "text" })
     };
@@ -222,7 +247,7 @@ public sealed class PipelineExecutor : IDisposable
     private static IEnumerable<PipelineStep> FullLlmPipelineSteps(string outputPath) => new[]
     {
         Step("search", new Dictionary<string, object?>()),
-        Step("enrich", new Dictionary<string, object?> { ["mode"] = "prioritize" }),
+        Step("enrich", new Dictionary<string, object?> { ["mode"] = "prioritize", ["applyChanges"] = true }),
         Step("summarize", new Dictionary<string, object?> { ["mode"] = "llm" }),
         Step("saveToFile", new Dictionary<string, object?> { ["path"] = outputPath, ["format"] = "markdown" })
     };

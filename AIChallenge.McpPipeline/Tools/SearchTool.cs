@@ -18,30 +18,10 @@ public sealed class SearchTool : IPipelineTool, IDisposable
     public string Name => "search";
     public string Description => "Получение задач из MCP-сервера. Возвращает JSON-массив задач с фильтрацией.";
 
-    public SearchTool(IConfiguration? configuration = null, Action<string>? log = null)
+    public SearchTool(McpTodoService? mcpService = null, Action<string>? log = null)
     {
+        _mcpService = mcpService;
         _log = log ?? (msg => Console.WriteLine($"  [search] {msg}"));
-
-        if (configuration != null)
-        {
-            try
-            {
-                _mcpService = new McpTodoService(
-                    (msg, level) =>
-                    {
-                        if (level == LogLevel.Warning && msg.Contains("Конфигурация"))
-                            return;
-                        if (level == LogLevel.Error)
-                            _log($"❌ {msg}");
-                    },
-                    configuration
-                );
-            }
-            catch (Exception ex)
-            {
-                _log($"⚠️ Не удалось создать McpTodoService: {ex.Message}");
-            }
-        }
     }
 
     public async Task<string> ExecuteAsync(Dictionary<string, object?> parameters)

@@ -1,4 +1,5 @@
 using AIChallenge.McpScheduler;
+using AIChallenge.Services;
 using System.Text.Json;
 
 namespace AIChallenge.McpPipeline.Tools;
@@ -9,6 +10,7 @@ namespace AIChallenge.McpPipeline.Tools;
 public sealed class EnrichTool : IPipelineTool, IDisposable
 {
     private readonly LlmSummaryService? _llmService;
+    private readonly McpTodoService? _mcpService;
     private readonly Action<string> _log;
     private bool _disposed;
 
@@ -16,24 +18,28 @@ public sealed class EnrichTool : IPipelineTool, IDisposable
     public string Name => "enrich";
     public string Description => "Приоритизация задач по срокам и обогащение описаний. Режимы: prioritize, enrich, both.";
 
-    public EnrichTool(LlmSummaryService? llmService = null, Action<string>? log = null)
+    public EnrichTool(LlmSummaryService? llmService = null, McpTodoService? mcpService = null, Action<string>? log = null)
     {
         _llmService = llmService;
+        _mcpService = mcpService;
         _log = log ?? (msg => Console.WriteLine($"  [enrich] {msg}"));
     }
 
-    public Task<string> ExecuteAsync(Dictionary<string, object?> parameters)
+    public async Task<string> ExecuteAsync(Dictionary<string, object?> parameters)
     {
         if (_disposed)
             throw new ObjectDisposedException(nameof(EnrichTool));
 
         if (!parameters.TryGetValue("tasksJson", out var tasksJsonObj) || tasksJsonObj == null)
-            return Task.FromResult("{\"error\": \"Отсутствует параметр tasksJson\"}");
+            return "{\"error\": \"Отсутствует параметр tasksJson\"}";
 
         var tasksJson = tasksJsonObj.ToString() ?? "[]";
         var mode = parameters.TryGetValue("mode", out var modeObj)
             ? (modeObj?.ToString()?.ToLowerInvariant() ?? "both")
             : "both";
+
+        var applyChanges = parameters.TryGetValue("applyChanges", out var acObj)
+            && acObj?.ToString()?.ToLowerInvariant() == "true";
 
         int deadlineDaysUrgent = 3;
         if (parameters.TryGetValue("deadlineDaysUrgent", out var du) && du != null)
@@ -49,7 +55,7 @@ public sealed class EnrichTool : IPipelineTool, IDisposable
         {
             using var doc = JsonDocument.Parse(tasksJson);
             if (doc.RootElement.ValueKind != JsonValueKind.Array)
-                return Task.FromResult("{\"error\": \"Ожидается JSON-массив\"}");
+                return "{\"error\": \"Ожидается JSON-массив\"}";
 
             var enrichedTasks = new List<JsonElement>();
             var prioritizedCount = 0;
@@ -90,22 +96,85 @@ public sealed class EnrichTool : IPipelineTool, IDisposable
             };
             var result = JsonSerializer.Serialize(enrichedTasks.ToArray(), options);
 
+            // Сохраняем изменения в MCP, если нужно
+            if (applyChanges && _mcpService != null)
+            {
+                await ApplyChangesToMcpAsync(doc, enrichedTasks);
+            }
+
             var updatedCount = prioritizedCount + enrichedCount;
             Summary = $"Обновлено задач: {updatedCount} (приоритеты: {prioritizedCount}, цвета: {colorChangedCount}, описаний: {enrichedCount})";
             _log($"✅ {Summary}");
 
-            return Task.FromResult(result);
+            return result;
         }
         catch (Exception ex)
         {
             _log($"❌ Ошибка обогащения: {ex.Message}");
             Summary = $"Ошибка: {ex.Message}";
-            return Task.FromResult($"{{\"error\": \"{ex.Message}\"}}");
+            return $"{{\"error\": \"{ex.Message}\"}}";
         }
     }
 
     private static bool IsPrioritizeMode(string mode) => mode.Contains("prioritize") || mode == "both";
     private static bool IsEnrichMode(string mode) => mode.Contains("enrich") || mode == "both";
+
+    private async Task ApplyChangesToMcpAsync(JsonDocument originalDoc, List<JsonElement> enrichedTasks)
+    {
+        int applied = 0;
+        int errors = 0;
+
+        var tasks = originalDoc.RootElement.EnumerateArray().ToList();
+        for (int i = 0; i < tasks.Count && i < enrichedTasks.Count; i++)
+        {
+            var original = tasks[i];
+            var enriched = enrichedTasks[i];
+
+            // Проверяем, есть ли изменения
+            var changed = false;
+
+            var oldPriority = original.GetProperty("Priority").GetInt32();
+            var newPriority = enriched.GetProperty("Priority").GetInt32();
+            if (oldPriority != newPriority) changed = true;
+
+            var oldColor = original.TryGetProperty("Color", out var oc) && oc.ValueKind == JsonValueKind.String ? oc.GetString() : null;
+            var newColor = enriched.TryGetProperty("Color", out var nc) && nc.ValueKind == JsonValueKind.String ? nc.GetString() : null;
+            if (oldColor != newColor) changed = true;
+
+            var oldDesc = original.TryGetProperty("Description", out var d) && d.ValueKind == JsonValueKind.String ? d.GetString() : null;
+            var newDesc = enriched.TryGetProperty("Description", out var nd) && nd.ValueKind == JsonValueKind.String ? nd.GetString() : null;
+            if (oldDesc != newDesc) changed = true;
+
+            if (!changed) continue;
+
+            int taskId = original.GetProperty("Id").GetInt32();
+
+            try
+            {
+                var args = new Dictionary<string, object?> { ["id"] = taskId };
+
+                if (oldPriority != newPriority)
+                    args["priority"] = MapPriorityToString(newPriority);
+
+                if (oldColor != newColor)
+                    args["color"] = newColor;
+
+                if (oldDesc != newDesc && !string.IsNullOrEmpty(newDesc))
+                    args["description"] = newDesc;
+
+                await _mcpService!.CallToolAsync("update_todo_item", args);
+                applied++;
+            }
+            catch (Exception ex)
+            {
+                errors++;
+                _log($"   ⚠️ Ошибка обновления задачи {taskId}: {ex.Message}");
+            }
+        }
+
+        if (applied > 0)
+            _log($"   💾 Применено изменений в MCP: {applied}{(errors > 0 ? $", ошибок: {errors}" : "")}");
+    }
 
     private JsonElement EnrichTask(JsonElement task, string mode, int deadlineDaysUrgent, int deadlineDaysHigh)
     {
@@ -284,6 +353,12 @@ public sealed class EnrichTool : IPipelineTool, IDisposable
     {
         1 => "#6b7280", 2 => "#3b82f6", 3 => "#f59e0b",
         4 => "#ef4444", 5 => "#dc2626", _ => "#6b7280"
+    };
+
+    private static string MapPriorityToString(int priority) => priority switch
+    {
+        1 => "low", 2 => "basic", 3 => "high",
+        4 => "veryhigh", 5 => "critical", _ => "basic"
     };
 
     public void Dispose()

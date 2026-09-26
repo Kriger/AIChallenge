@@ -95,7 +95,8 @@ static async Task RunCustomPipelineAsync(IConfiguration config)
     Console.WriteLine("Введите путь для сохранения (или Enter для авто-имени):");
     var outputPath = Console.ReadLine()?.Trim();
     if (string.IsNullOrEmpty(outputPath))
-        outputPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "memory", $"pipeline_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
+    if (string.IsNullOrEmpty(outputPath))
+        outputPath = Path.Combine(GetProjectDir(), "mcp_pipeline", $"pipeline_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
 
     Console.WriteLine("Режим суммаризации (stats/diff/llm, Enter=stats):");
     var mode = Console.ReadLine()?.ToLowerInvariant() ?? "stats";
@@ -151,9 +152,16 @@ static bool TryCreateLlmService(IConfiguration config, Action<string> log, out L
     return true;
 }
 
+static string GetProjectDir()
+{
+    var assemblyDir = Path.GetDirectoryName(AppDomain.CurrentDomain.BaseDirectory) ?? ".";
+    return Path.GetFullPath(Path.Combine(assemblyDir, "..", "..", ".."));
+}
+
 static string GetOutputPath(IConfiguration config, string defaultFileName)
 {
-    var outputDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "memory");
+    var outputDir = Path.Combine(GetProjectDir(), "mcp_pipeline");
+    Directory.CreateDirectory(outputDir);
     return Path.Combine(outputDir, defaultFileName);
 }
 
@@ -234,12 +242,12 @@ static void PrintConfig(IConfiguration configuration)
         Console.WriteLine("   ⚠️  Не настроен (LLM-режим недоступен)");
     Console.WriteLine();
 
-    var memoryDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "memory");
+    var dataDir = Path.Combine(GetProjectDir(), "mcp_pipeline");
     Console.WriteLine("💾 Хранилище:");
-    Console.WriteLine($"   Каталог: {memoryDir}");
-    if (Directory.Exists(memoryDir))
+    Console.WriteLine($"   Каталог: {dataDir}");
+    if (Directory.Exists(dataDir))
     {
-        var files = Directory.GetFiles(memoryDir);
+        var files = Directory.GetFiles(dataDir);
         Console.WriteLine($"   Файлов: {files.Length}");
         foreach (var f in files)
         {
@@ -258,14 +266,14 @@ static void RunClearAsync()
 {
     Console.WriteLine("🗑️  MCP Pipeline — очистка памяти\n");
 
-    var memoryDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "memory");
-    if (!Directory.Exists(memoryDir))
+    var dataDir = Path.Combine(GetProjectDir(), "mcp_pipeline");
+    if (!Directory.Exists(dataDir))
     {
-        Console.WriteLine("ℹ️  Каталог memory/ не существует, нечего очищать");
+        Console.WriteLine("ℹ️  Каталог mcp_pipeline/ не существует, нечего очищать");
         return;
     }
 
-    var files = Directory.GetFiles(memoryDir, "pipeline_*");
+    var files = Directory.GetFiles(dataDir, "pipeline_*");
     var cleared = 0;
     foreach (var file in files)
     {

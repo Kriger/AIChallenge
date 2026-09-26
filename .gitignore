@@ -38,3 +38,6 @@ Thumbs.db
 ## Runtime data (CLI)
 AIChallenge.Cli/memory/
 AIChallenge.Cli/fsm_state.json
+
+## MCP Pipeline intermediate files
+AIChallenge.McpPipeline/mcp_pipeline/
