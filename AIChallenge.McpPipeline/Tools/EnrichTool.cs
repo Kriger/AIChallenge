@@ -352,7 +352,7 @@ public sealed class EnrichTool : IPipelineTool, IDisposable
     private static string GetColorForPriority(int priority) => priority switch
     {
         1 => "#6b7280", 2 => "#3b82f6", 3 => "#f59e0b",
-        4 => "#ef4444", 5 => "#dc2626", _ => "#6b7280"
+        4 => "#ef4444", 5 => "#000000", _ => "#6b7280"
     };
 
     private static string MapPriorityToString(int priority) => priority switch
