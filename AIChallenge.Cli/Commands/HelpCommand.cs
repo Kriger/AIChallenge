@@ -64,6 +64,13 @@ public sealed class HelpCommand : CommandHandler
         PrintCmd("todo status", "статус подключения");
         Console.WriteLine();
 
+        PrintYellow("── MCP Pipeline ──");
+        PrintCmd("mcp-pipeline project-status --repo AIChallenge", "статус проекта (GitHub + TodoMCP)");
+        PrintCmd("mcp-pipeline repo-analyze --owner user --repo proj", "анализ репозитория");
+        PrintCmd("mcp-pipeline todo-report", "отчёт по задачам");
+        PrintCmd("mcp-pipeline repo-sync --owner Kriger --repo AIChallenge", "синхронизация GitHub → TodoMCP");
+        Console.WriteLine();
+
         PrintYellow("── Прочее ──");
         PrintCmd("save", "сохранить контекст");
         PrintCmd("clear", "очистить историю");

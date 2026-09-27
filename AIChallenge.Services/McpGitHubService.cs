@@ -40,7 +40,8 @@ public sealed class McpGitHubService : IAsyncDisposable
             return;
 
         var mcpConfig = _configuration.GetSection("Mcp");
-        var mcpEnabled = mcpConfig["Enabled"] == "true";
+        var mcpEnabledStr = mcpConfig["Enabled"];
+        var mcpEnabled = bool.TryParse(mcpEnabledStr, out var parsed) && parsed;
         if (!mcpEnabled)
         {
             Log("MCP отключён в конфигурации", LogLevel.Warning);

@@ -241,6 +241,128 @@ public sealed class McpTodoService : IAsyncDisposable
             }
         }
 
+        // Для create_todo_item: если передано projectTitle/project но не передан projectId — разрешаем projectId
+        if (toolName.Equals("create_todo_item", StringComparison.OrdinalIgnoreCase) && args is not null)
+        {
+            var argsNormalized = args.Keys.ToDictionary(k => k.ToLowerInvariant(), v => args[v]);
+            bool hasProjectId = argsNormalized.ContainsKey("projectid");
+            bool hasProjectTitle = argsNormalized.ContainsKey("projecttitle") || argsNormalized.ContainsKey("project") || argsNormalized.ContainsKey("названиепроекта") || argsNormalized.ContainsKey("проект");
+
+            if (!hasProjectId && hasProjectTitle)
+            {
+                string? titleValue = null;
+                if (argsNormalized.TryGetValue("projecttitle", out var pt1)) titleValue = NormalizeToString(pt1);
+                else if (argsNormalized.TryGetValue("project", out var pt2)) titleValue = NormalizeToString(pt2);
+                else if (argsNormalized.TryGetValue("названиепроекта", out var pt3)) titleValue = NormalizeToString(pt3);
+                else if (argsNormalized.TryGetValue("проект", out var pt4)) titleValue = NormalizeToString(pt4);
+
+                if (!string.IsNullOrEmpty(titleValue))
+                {
+                    Log($"🔍 create_todo_item: projectId не указан, ищем проект по названию '{titleValue}'", LogLevel.Info);
+                    var listResult = await CallToolAsync("list_projects", null);
+                    try
+                    {
+                        using var doc = JsonDocument.Parse(listResult);
+                        var root = doc.RootElement;
+                        if (root.ValueKind == JsonValueKind.Array)
+                        {
+                            int? foundId = null;
+                            foreach (var item in root.EnumerateArray())
+                            {
+                                var itemTitle = TryGetPropertyAsString(item, "Title", "title", "Название", "name", "Subject", "subject");
+                                if (!string.IsNullOrEmpty(itemTitle) && itemTitle.Equals(titleValue, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    var idStr = TryGetPropertyAsString(item, "Id", "id", "ID", "ProjectId", "projectid");
+                                    if (int.TryParse(idStr, out var parsedId))
+                                    {
+                                        foundId = parsedId;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (foundId.HasValue)
+                            {
+                                Log($"✅ Найден проект: ID={foundId.Value}", LogLevel.Info);
+                                args = new Dictionary<string, object?>(args)
+                                {
+                                    ["projectId"] = foundId.Value
+                                };
+                            }
+                            else
+                            {
+                                Log($"❌ Проект с названием '{titleValue}' не найден", LogLevel.Warning);
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Log($"⚠️ Не удалось разрешить ID проекта по названию: {ex.Message}", LogLevel.Warning);
+                    }
+                }
+            }
+        }
+
+        // Для list_todo_items: если передано projectTitle/project но не передан projectId — разрешаем projectId
+        if (toolName.Equals("list_todo_items", StringComparison.OrdinalIgnoreCase) && args is not null)
+        {
+            var argsNormalized = args.Keys.ToDictionary(k => k.ToLowerInvariant(), v => args[v]);
+            bool hasProjectId = argsNormalized.ContainsKey("projectid");
+            bool hasProjectTitle = argsNormalized.ContainsKey("projecttitle") || argsNormalized.ContainsKey("project") || argsNormalized.ContainsKey("названиепроекта") || argsNormalized.ContainsKey("проект");
+
+            if (!hasProjectId && hasProjectTitle)
+            {
+                string? titleValue = null;
+                if (argsNormalized.TryGetValue("projecttitle", out var pt1)) titleValue = NormalizeToString(pt1);
+                else if (argsNormalized.TryGetValue("project", out var pt2)) titleValue = NormalizeToString(pt2);
+                else if (argsNormalized.TryGetValue("названиепроекта", out var pt3)) titleValue = NormalizeToString(pt3);
+                else if (argsNormalized.TryGetValue("проект", out var pt4)) titleValue = NormalizeToString(pt4);
+
+                if (!string.IsNullOrEmpty(titleValue))
+                {
+                    Log($"🔍 list_todo_items: projectId не указан, ищем проект по названию '{titleValue}'", LogLevel.Info);
+                    var listResult = await CallToolAsync("list_projects", null);
+                    try
+                    {
+                        using var doc = JsonDocument.Parse(listResult);
+                        var root = doc.RootElement;
+                        if (root.ValueKind == JsonValueKind.Array)
+                        {
+                            int? foundId = null;
+                            foreach (var item in root.EnumerateArray())
+                            {
+                                var itemTitle = TryGetPropertyAsString(item, "Title", "title", "Название", "name", "Subject", "subject");
+                                if (!string.IsNullOrEmpty(itemTitle) && itemTitle.Equals(titleValue, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    var idStr = TryGetPropertyAsString(item, "Id", "id", "ID", "ProjectId", "projectid");
+                                    if (int.TryParse(idStr, out var parsedId))
+                                    {
+                                        foundId = parsedId;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (foundId.HasValue)
+                            {
+                                Log($"✅ Найден проект: ID={foundId.Value}", LogLevel.Info);
+                                args = new Dictionary<string, object?>(args)
+                                {
+                                    ["projectId"] = foundId.Value
+                                };
+                            }
+                            else
+                            {
+                                Log($"❌ Проект с названием '{titleValue}' не найден", LogLevel.Warning);
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Log($"⚠️ Не удалось разрешить ID проекта по названию: {ex.Message}", LogLevel.Warning);
+                    }
+                }
+            }
+        }
+
         // Для get_project: если передано название проекта но не передан id — разрешаем id по списку проектов
         if (toolName.Equals("get_project", StringComparison.OrdinalIgnoreCase) && args is not null)
         {

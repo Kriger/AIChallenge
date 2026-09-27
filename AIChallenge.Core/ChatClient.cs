@@ -27,7 +27,8 @@ public class ChatClient
         string[]? stopSequences,
         string systemMessage,
         string accessToken,
-        List<AIChallenge.Models.ApiMessage>? systemMessages = null
+        List<AIChallenge.Models.ApiMessage>? systemMessages = null,
+        List<ToolDefinition>? tools = null
     )
     {
         _httpClient.DefaultRequestHeaders.Authorization =
@@ -74,6 +75,21 @@ public class ChatClient
             ["stream"] = false,
             ["repetition_penalty"] = 1,
         };
+        
+        // Добавляем инструменты, если они есть
+        if (tools is { Count: > 0 })
+        {
+            requestBody["tools"] = tools.Select(t => new
+            {
+                type = "function",
+                function = new
+                {
+                    name = t.Name,
+                    description = t.Description,
+                    parameters = t.Parameters
+                }
+            }).ToList();
+        }
 
         if (maxTokens.HasValue && maxTokens.Value > 0)
         {

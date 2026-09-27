@@ -367,6 +367,25 @@ catch (Exception ex)
     Console.WriteLine();
 }
 
+// Подключаем McpPipelineCommand к MCP-реестру
+try
+{
+    var mcpPipelineCmd = CommandRegistry.Commands
+        .Select(CommandRegistry.GetHandler)
+        .OfType<McpPipelineCommand>()
+        .FirstOrDefault();
+
+    if (mcpPipelineCmd is not null)
+    {
+        mcpPipelineCmd.McpRegistry = mcpRegistry;
+        Console.WriteLine("✅ McpPipelineCommand подключён к MCP-реестру (все инструменты)");
+    }
+}
+catch (Exception ex)
+{
+    Console.WriteLine($"⚠️  Ошибка подключения McpPipelineCommand: {ex.Message}");
+}
+
 // Загружаем контекст из предыдущей сессии
 ContextPersistence.LoadContext(agent);
 
@@ -444,7 +463,7 @@ while (true)
     // Команды конфигурации
     if (input.StartsWith("/"))
     {
-        var parts = input.Split(' ', 4, StringSplitOptions.TrimEntries);
+        var parts = input.Split(' ', 8, StringSplitOptions.TrimEntries);
         var command = parts[0].TrimStart('/').ToLowerInvariant();
 
         var cmdHandler = CommandRegistry.GetHandler(command);

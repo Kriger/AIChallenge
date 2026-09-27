@@ -410,7 +410,6 @@ public class ChatAgent
         // Формируем расширенное системное сообщение с фактами, summary и инструментами
         var extendedSystemMessage = BuildExtendedSystemMessage(relevantFacts, contextResult);
 
-        // Логирование для отладки — что уходит в API
         Logger.Debug($"[API] Системное сообщение: {extendedSystemMessage[..Math.Min(200, extendedSystemMessage.Length)]}...");
         Logger.Debug($"[API] Фактов LongTerm: {relevantFacts.Count}");
         Logger.Debug($"[API] Recent messages: {contextResult.RecentMessages.Count}, system messages: {contextResult.SystemMessages.Count}");
@@ -443,6 +442,36 @@ public class ChatAgent
             {
                 var token = await _authClient.GetAccessTokenAsync();
 
+                // Подготавливаем инструменты для function calling
+                List<ToolDefinition>? toolDefinitions = null;
+                if (McpRegistry is not null && McpRegistry.Tools.Count > 0)
+                {
+                    var toolsWithSchema = McpRegistry.Tools.Where(t => !string.IsNullOrWhiteSpace(t.InputSchema)).ToList();
+                    
+                    toolDefinitions = toolsWithSchema
+                        .Select(t =>
+                        {
+                            try
+                            {
+                                var parameters = System.Text.Json.JsonSerializer.Deserialize<object>(t.InputSchema!);
+                                return new ToolDefinition(
+                                    Name: t.Name,
+                                    Description: t.Description ?? string.Empty,
+                                    Parameters: parameters ?? new {}
+                                );
+                            }
+                            catch
+                            {
+                                return new ToolDefinition(
+                                    Name: t.Name,
+                                    Description: t.Description ?? string.Empty,
+                                    Parameters: new {}
+                                );
+                            }
+                        })
+                        .ToList();
+                }
+
                 var apiResponse = await _httpClient.SendCompletionAsync(
                     Model,
                     contextResult.RecentMessages,
@@ -451,7 +480,8 @@ public class ChatAgent
                     StopSequences,
                     extendedSystemMessage,
                     token,
-                    contextResult.SystemMessages
+                    contextResult.SystemMessages,
+                    toolDefinitions
                 );
 
                 // Добавляем ответ в историю, краткосрочную память и ContextManager
@@ -914,10 +944,20 @@ public class ChatAgent
             sb.AppendLine(SystemMessage);
         }
 
-        // 3.5. MCP-инструменты
+        // 3.5. MCP-инструменты (краткое описание)
         if (McpRegistry is not null && McpRegistry.Tools.Count > 0)
         {
-            sb.AppendLine(McpRegistry.GetToolsPrompt());
+            sb.AppendLine("=== ИНСТРУМЕНТЫ ===");
+            sb.AppendLine("Ты имеешь доступ к внешним инструментам. Когда нужно выполнить действие — используй формат:");
+            sb.AppendLine("  <<tool:имя_инструмента>>");
+            sb.AppendLine("  {\"аргумент\": \"значение\"}");
+            sb.AppendLine();
+            sb.AppendLine("Доступные инструменты:");
+            foreach (var tool in McpRegistry.Tools.Take(20))
+            {
+                sb.AppendLine($"  - **{tool.Name}**: {tool.Description}");
+            }
+            sb.AppendLine("=== КОНЕЦ ИНСТРУМЕНТОВ ===");
 
             // === ПЕРСИСТЕНТНАЯ ИНСТРУКЦИЯ: ВСЕГДА показывай данные из инструментов ===
             sb.AppendLine();

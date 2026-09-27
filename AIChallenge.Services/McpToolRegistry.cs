@@ -38,10 +38,52 @@ public sealed class McpToolRegistry : IAsyncDisposable
     public static List<(string Name, string? Args)> ParseToolCalls(string response)
     {
         var matches = ToolCallRegex.Matches(response);
-        return matches.Select(m => (
-            Name: m.Groups["name"].Value,
-            Args: m.Groups["args"].Success ? m.Groups["args"].Value : null
-        )).ToList();
+        var results = new List<(string Name, string? Args)>();
+        
+        foreach (Match m in matches)
+        {
+            var toolName = m.Groups["name"].Value;
+            var argsRaw = m.Groups["args"].Success ? m.Groups["args"].Value : null;
+            
+            // Для аргументов с вложенными {} — ищем корректный JSON
+            if (argsRaw != null && argsRaw.Contains("{"))
+            {
+                argsRaw = ExtractBalancedJson(argsRaw);
+            }
+            
+            results.Add((toolName, argsRaw));
+        }
+        
+        return results;
+    }
+    
+    /// <summary>
+    /// Извлекает JSON сбалансированными фигурными скобками.
+    /// </summary>
+    private static string? ExtractBalancedJson(string raw)
+    {
+        var depth = 0;
+        var start = -1;
+        
+        for (var i = 0; i < raw.Length; i++)
+        {
+            if (raw[i] == '{')
+            {
+                if (depth == 0) start = i;
+                depth++;
+            }
+            else if (raw[i] == '}')
+            {
+                depth--;
+                if (depth == 0 && start >= 0)
+                {
+                    return raw[start..(i + 1)];
+                }
+            }
+        }
+        
+        // Если не нашли баланс — возвращаем как есть
+        return raw;
     }
 
     /// <summary>

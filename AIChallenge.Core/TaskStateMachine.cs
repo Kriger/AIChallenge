@@ -600,7 +600,8 @@ public class TaskStateMachine
             temperature: 0.3,
             stopSequences: Array.Empty<string>(),
             systemMessage,
-            token
+            token,
+            systemMessages: null
         );
 
         return response.Content;
@@ -629,7 +630,8 @@ public class TaskStateMachine
             temperature: 0.5,
             stopSequences: Array.Empty<string>(),
             systemMessage,
-            token
+            token,
+            systemMessages: null
         );
 
         return response.Content;
@@ -658,7 +660,8 @@ public class TaskStateMachine
             temperature: 0.1,
             stopSequences: Array.Empty<string>(),
             systemMessage,
-            token
+            token,
+            systemMessages: null
         );
 
         var content = response.Content.ToLowerInvariant();
@@ -950,7 +953,8 @@ public class TaskStateMachine
             temperature: 0.7,
             stopSequences: Array.Empty<string>(),
             systemMessage,
-            token
+            token,
+            systemMessages: null
         );
 
         // Парсим вопросы из ответа
