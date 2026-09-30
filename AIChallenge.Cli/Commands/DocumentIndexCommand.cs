@@ -2,6 +2,7 @@ using AIChallenge.Cli.Commands;
 using AIChallenge.DocumentIndexing;
 using AIChallenge.DocumentIndexing.Chunking;
 using AIChallenge.DocumentIndexing.Embeddings;
+using AIChallenge.DocumentIndexing.Indexing;
 using AIChallenge.DocumentIndexing.Models;
 using AIChallenge.Models;
 using System.Linq;
@@ -64,23 +65,37 @@ public class DocumentIndexCommand : CommandHandler
         return (strategy, safeName);
     }
 
-    private static List<string> GetJsonFiles(string indexDir)
+    private static List<string> GetIndexFiles(string indexDir)
         => Directory.GetFiles(indexDir, "index_*.json")
             .OrderByDescending(f => File.GetLastWriteTime(f))
             .ToList();
 
     private static string? FindBinFile(string indexDir, string strategy, string safeName)
-        => Directory.GetFiles(indexDir, $"embed_{strategy}_{safeName}.bin").FirstOrDefault();
+        => Directory.GetFiles(indexDir, $"index_{strategy}_{safeName}.bin").FirstOrDefault();
+
+    private static byte[] StripUtf8Bom(byte[] bytes)
+    {
+        if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF)
+            return bytes[3..];
+        return bytes;
+    }
+
+    private JsonDocument ParseJsonWithBomHandling(string filePath)
+    {
+        var bytes = File.ReadAllBytes(filePath);
+        bytes = StripUtf8Bom(bytes);
+        return JsonDocument.Parse(bytes);
+    }
 
     private void ShowHelp(DocumentIndexingConfig cfg)
     {
         Console.WriteLine($"""
             📄 Команды индексации документов:
 
-            /doc index <path> [strategy]
+            /doc index <path> [chunking_strategy]
               - Индексировать документ или папку (потоково, память не растёт)
               - path: путь к файлу или папке с документами
-              - strategy: fixed_size или structural (по умолчанию: structural)
+              - chunking_strategy: fixed_size или structural (по умолчанию: structural)
               - Форматы: PDF, TXT, MD, CS, PY, JS, JSON, XML, YAML
               - Эмбеддинги: Ollama ({cfg.OllamaEmbeddingModel})
 
@@ -105,12 +120,12 @@ public class DocumentIndexCommand : CommandHandler
     {
         if (parts.Length < 3)
         {
-            Console.WriteLine("❌ Укажите путь: /doc index <path> [strategy]");
+            Console.WriteLine("❌ Укажите путь: /doc index <path> [chunking_strategy]");
             return true;
         }
 
         var path = parts[2];
-        var strategyName = parts.Length > 3 ? parts[3].ToLowerInvariant() : "structural";
+        var chunkingStrategyName = parts.Length > 3 ? parts[3].ToLowerInvariant() : "structural";
 
         if (!File.Exists(path) && !Directory.Exists(path))
         {
@@ -125,7 +140,7 @@ public class DocumentIndexCommand : CommandHandler
         {
             var indexer = new DocumentIndexer(embeddingProvider);
 
-            IChunkingStrategy strategy = strategyName switch
+            IChunkingStrategy chunkingStrategy = chunkingStrategyName switch
             {
                 "fixed" or "fixed_size" => new FixedSizeChunking(
                     chunkSize: ctx.DocIndexConfig.ChunkSize,
@@ -135,14 +150,14 @@ public class DocumentIndexCommand : CommandHandler
             };
 
             Console.WriteLine($"📚 Путь: {path}");
-            Console.WriteLine($"🔧 Стратегия: {strategy.Name}");
+            Console.WriteLine($"🔧 Стратегия: {chunkingStrategy.Name}");
             Console.WriteLine($"💾 Сохранение: {indexDir}");
             Console.WriteLine();
 
             if (File.Exists(path))
             {
                 Console.WriteLine($"[1/1] {Path.GetFileName(path)}...");
-                var ok = await indexer.IndexFileAsync(path, strategy, indexDir);
+                var ok = await indexer.IndexFileAsync(path, chunkingStrategy, indexDir);
                 Console.WriteLine();
                 Console.WriteLine(ok ? "✅ Индексация завершена!" : "❌ Ошибка индексации");
             }
@@ -157,7 +172,7 @@ public class DocumentIndexCommand : CommandHandler
                 Console.WriteLine();
 
                 await indexer.IndexDirectoryAsync(
-                    path, strategy, indexDir, recursive: true,
+                    path, chunkingStrategy, indexDir, recursive: true,
                     progressCallback: (current, total) =>
                         Console.WriteLine($"  Прогресс: {current}/{total} ({current * 100 / total}%)"));
 
@@ -242,9 +257,9 @@ public class DocumentIndexCommand : CommandHandler
 
         var query = string.Join(" ", parts.Skip(2));
         var indexDir = GetIndexDir(ctx);
-        var jsonFiles = GetJsonFiles(indexDir);
+        var indexFiles = GetIndexFiles(indexDir);
 
-        if (jsonFiles.Count == 0)
+        if (indexFiles.Count == 0)
         {
             Console.WriteLine("❌ Индексы не найдены.");
             return true;
@@ -257,7 +272,7 @@ public class DocumentIndexCommand : CommandHandler
         {
             var indexer = new DocumentIndexer(embeddingProvider);
 
-            foreach (var jsonFile in jsonFiles)
+            foreach (var jsonFile in indexFiles)
             {
                 var (strategy, safeName) = ParseIndexFileName(jsonFile);
                 var binFile = FindBinFile(indexDir, strategy, safeName);
@@ -305,9 +320,9 @@ public class DocumentIndexCommand : CommandHandler
     private async Task<bool> ShowVectorsAsync(string[] parts, CommandContext ctx)
     {
         var indexDir = GetIndexDir(ctx);
-        var jsonFiles = GetJsonFiles(indexDir);
+        var indexFiles = GetIndexFiles(indexDir);
 
-        if (jsonFiles.Count == 0)
+        if (indexFiles.Count == 0)
         {
             Console.WriteLine("❌ Индексы не найдены.");
             return true;
@@ -318,7 +333,7 @@ public class DocumentIndexCommand : CommandHandler
 
         try
         {
-            foreach (var jsonFile in jsonFiles)
+            foreach (var jsonFile in indexFiles)
             {
                 var baseName = Path.GetFileNameWithoutExtension(jsonFile);
                 if (filter != null && !baseName.ToLowerInvariant().Contains(filter))
@@ -326,7 +341,7 @@ public class DocumentIndexCommand : CommandHandler
 
                 Console.WriteLine($"📁 {baseName}");
 
-                using var doc = JsonDocument.Parse(File.ReadAllBytes(jsonFile));
+                using var doc = ParseJsonWithBomHandling(jsonFile);
                 var root = doc.RootElement;
                 var chunksJson = root.GetProperty("chunks");
                 var chunkCount = chunksJson.GetArrayLength();
@@ -373,9 +388,9 @@ public class DocumentIndexCommand : CommandHandler
     private async Task<bool> ListDocumentsAsync(string[] parts, CommandContext ctx)
     {
         var indexDir = GetIndexDir(ctx);
-        var jsonFiles = GetJsonFiles(indexDir);
+        var indexFiles = GetIndexFiles(indexDir);
 
-        if (jsonFiles.Count == 0)
+        if (indexFiles.Count == 0)
         {
             Console.WriteLine("❌ Индексы не найдены.");
             return true;
@@ -383,11 +398,11 @@ public class DocumentIndexCommand : CommandHandler
 
         Console.WriteLine("=== Проиндексированные документы ===\n");
 
-        foreach (var jsonFile in jsonFiles)
+        foreach (var jsonFile in indexFiles)
         {
             try
             {
-                using var doc = JsonDocument.Parse(File.ReadAllBytes(jsonFile));
+                using var doc = ParseJsonWithBomHandling(jsonFile);
                 var root = doc.RootElement;
 
                 var chunkCount = root.GetProperty("chunk_count").GetInt32();

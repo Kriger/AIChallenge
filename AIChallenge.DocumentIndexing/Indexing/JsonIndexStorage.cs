@@ -27,7 +27,7 @@ public class JsonIndexStorage : IIndexStorage
 
         // Сохраняем полный индекс с эмбеддингами
         var json = index.ToJson();
-        await File.WriteAllTextAsync(path, json, Encoding.UTF8);
+        await File.WriteAllTextAsync(path, json, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
     }
 
     /// <summary>

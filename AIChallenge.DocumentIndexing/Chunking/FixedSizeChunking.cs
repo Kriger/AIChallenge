@@ -75,7 +75,11 @@ public class FixedSizeChunking : IChunkingStrategy
             });
             chunkIndex++;
 
-            startIndex = endIndex - _overlap;
+            var newStartIndex = endIndex - _overlap;
+            // Защита от бесконечного цикла: если чанк короткий, двигаемся без перекрытия
+            if (newStartIndex <= startIndex)
+                newStartIndex = endIndex;
+            startIndex = newStartIndex;
             if (startIndex >= text.Length)
                 break;
         }

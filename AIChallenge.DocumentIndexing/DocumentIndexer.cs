@@ -1,5 +1,6 @@
 using AIChallenge.DocumentIndexing.Chunking;
 using AIChallenge.DocumentIndexing.Embeddings;
+using AIChallenge.DocumentIndexing.Indexing;
 using AIChallenge.DocumentIndexing.Models;
 using System.Text.Json;
 
@@ -47,11 +48,13 @@ public class ChunkingComparisonResult
 public class DocumentIndexer
 {
     private readonly IEmbeddingProvider _embeddingProvider;
+    private readonly FaissIndexStorage _indexStorage;
     private readonly Action<string>? _logAction;
 
     public DocumentIndexer(IEmbeddingProvider embeddingProvider, Action<string>? logAction = null)
     {
         _embeddingProvider = embeddingProvider;
+        _indexStorage = new FaissIndexStorage();
         _logAction = logAction;
     }
 
@@ -99,20 +102,19 @@ public class DocumentIndexer
                 }
 
                 var safeName = SanitizeName(title);
-                var indexJsonPath = Path.Combine(outputDir, $"index_{chunkingStrategy.Name}_{safeName}.json");
-                var embeddingsPath = Path.Combine(outputDir, $"embed_{chunkingStrategy.Name}_{safeName}.bin");
+                var indexFilePath = Path.Combine(outputDir, $"index_{_indexStorage.Name}_{chunkingStrategy.Name}_{safeName}");
 
                 // Проход 2: stream JSON + эмбеддинги
                 var embStopwatch = System.Diagnostics.Stopwatch.StartNew();
-                var embProgress = new Progress<int>(completed =>
-                    Log($"  Эмбеддинги: {completed}%"));
+                var embProgress = new Progress<int>(n =>
+                    Log($"  Эмбеддинги: {n}"));
 
-                await StreamIndexAsync(text, file, title, chunkingStrategy, indexJsonPath, embeddingsPath, embProgress);
+                var chunkCount = await StreamIndexAsync(text, file, title, chunkingStrategy, indexFilePath, embProgress);
                 embStopwatch.Stop();
 
-                var embSize = new FileInfo(embeddingsPath).Length;
+                var embSize = new FileInfo($"{indexFilePath}.bin").Length;
                 totalBytes += embSize;
-                totalChunks += 1;
+                totalChunks += chunkCount;
 
                 Log($"  ✅ {embStopwatch.ElapsedMilliseconds} мс, {embSize / 1024} KB");
             }
@@ -153,234 +155,75 @@ public class DocumentIndexer
         }
 
         var safeName = SanitizeName(title);
-        var indexJsonPath = Path.Combine(outputDir, $"index_{chunkingStrategy.Name}_{safeName}.json");
-        var embeddingsPath = Path.Combine(outputDir, $"embed_{chunkingStrategy.Name}_{safeName}.bin");
+        var indexFilePath = Path.Combine(outputDir, $"index_{_indexStorage.Name}_{chunkingStrategy.Name}_{safeName}");
 
         var embStopwatch = System.Diagnostics.Stopwatch.StartNew();
-        await StreamIndexAsync(text, filePath, title, chunkingStrategy, indexJsonPath, embeddingsPath, null!);
+        var chunkCount = await StreamIndexAsync(text, filePath, title, chunkingStrategy, indexFilePath, null!);
         embStopwatch.Stop();
 
-        var embSize = new FileInfo(embeddingsPath).Length;
+        var embSize = new FileInfo($"{indexFilePath}.bin").Length;
         Log($"  ✅ {embStopwatch.ElapsedMilliseconds} мс, {embSize / 1024} KB");
-        Log($"  📋 {indexJsonPath}");
-        Log($"  💾 {embeddingsPath}");
+        Log($"  📋 {indexFilePath}.json");
+        Log($"  💾 {indexFilePath}.bin");
 
-        return true;
+        return chunkCount > 0;
     }
 
     /// <summary>
     /// Stream-пишет JSON-индекс и эмбеддинги в ОДНОМ проходе по чанкам.
     /// </summary>
-    private async Task StreamIndexAsync(
+    private async Task<int> StreamIndexAsync(
         string text,
         string source,
         string title,
         IChunkingStrategy chunkingStrategy,
-        string indexJsonPath,
-        string embeddingsPath,
+        string indexFilePath,
         IProgress<int> embProgress)
     {
-        await using var jsonFs = new FileStream(indexJsonPath, FileMode.Create, FileAccess.Write, FileShare.None);
-        await using var jsonW = new StreamWriter(jsonFs, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), 8192);
-        var w = new JsonStreamWriter(jsonW);
-
-        WriteIndexHeader(w, _embeddingProvider.ProviderName, _embeddingProvider.Dimension, chunkingStrategy.Name);
-
-        await using var embFs = new FileStream(embeddingsPath, FileMode.Create, FileAccess.Write, FileShare.None);
-        await using var embBw = new BinaryWriter(embFs);
-        embBw.Write(1); // version
-        embBw.Write(0); // placeholder for dimension
-        embBw.Write(0); // placeholder for count
-
+        var chunks = new List<DocumentChunk>();
+        var embeddings = new List<float[]>();
         var chunkIndex = 0;
-        var chunkCount = 0;
         var actualDimension = 0;
 
         foreach (var chunk in chunkingStrategy.Chunk(text, source, title))
         {
-            chunkCount++;
-
-            WriteChunkJson(w, chunk, chunkCount);
-
             try
             {
                 var vector = await _embeddingProvider.GenerateEmbeddingAsync(chunk.Text);
                 if (actualDimension == 0) actualDimension = vector.Length;
-                foreach (var value in vector) embBw.Write(value);
+                
+                chunk.Embedding = vector;
+                chunks.Add(chunk);
+                embeddings.Add(vector);
+                embProgress?.Report(chunkIndex + 1);
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"  ⚠️  Ошибка эмбеддинга чанка {chunkIndex + 1}: {ex.Message}");
-                for (var j = 0; j < (actualDimension > 0 ? actualDimension : 768); j++) embBw.Write(0f);
             }
 
             chunkIndex++;
-            embProgress?.Report(chunkIndex);
         }
 
-        w.WriteEndArray();
-        w.WritePropertyName("chunk_count");
-        w.WriteValue(chunkCount);
+        if (chunks.Count == 0) return 0;
 
-        embBw.BaseStream.Position = 4;
-        embBw.Write(actualDimension);
-        embBw.BaseStream.Position = 8;
-        embBw.Write(chunkCount);
-        embBw.BaseStream.Position = embBw.BaseStream.Length;
-        w.WriteEndObject();
-        await w.FlushAsync();
-        embBw.Flush();
+        var index = new DocumentIndex
+        {
+            Version = "1.0.0",
+            CreatedAt = DateTime.UtcNow,
+            ChunkCount = chunks.Count,
+            EmbeddingDimension = actualDimension,
+            ChunkingStrategies = new() { chunkingStrategy.Name },
+            Chunks = chunks
+        };
+
+        var embeddingsArray = embeddings.ToArray();
+        await _indexStorage.SaveAsync(index, embeddingsArray, $"{indexFilePath}.bin");
+
+        return chunks.Count;
     }
 
-    private static void WriteIndexHeader(JsonStreamWriter w, string providerName, int dimension, string strategyName)
-    {
-        w.WriteStartObject();
-        w.WritePropertyName("version"); w.WriteValue("1.0.0");
-        w.WritePropertyName("created_at"); w.WriteValue(DateTime.UtcNow.ToString("o"));
-        w.WritePropertyName("embedding_provider"); w.WriteValue(providerName);
-        w.WritePropertyName("embedding_dimension"); w.WriteValue(dimension);
-        w.WritePropertyName("chunking_strategies");
-        w.WriteStartArray();
-        w.WriteValue(strategyName);
-        w.WriteEndArray();
-        w.WritePropertyName("chunks");
-        w.WriteStartArray();
-    }
 
-    private static void WriteChunkJson(JsonStreamWriter w, DocumentChunk chunk, int chunkCount)
-    {
-        w.WriteStartObject();
-        w.WritePropertyName("id"); w.WriteValue(chunk.Id);
-        w.WritePropertyName("text"); w.WriteValue(chunk.Text);
-        w.WritePropertyName("metadata");
-        w.WriteStartObject();
-        w.WritePropertyName("source"); w.WriteValue(chunk.Metadata.Source);
-        w.WritePropertyName("title"); w.WriteValue(chunk.Metadata.Title);
-        w.WritePropertyName("section"); w.WriteValue(chunk.Metadata.Section);
-        w.WritePropertyName("chunk_id"); w.WriteValue(chunk.Metadata.ChunkId);
-        w.WritePropertyName("chunk_index"); w.WriteValue(chunk.Metadata.ChunkIndex);
-        w.WritePropertyName("total_chunks"); w.WriteValue(chunkCount);
-        w.WritePropertyName("chunking_strategy"); w.WriteValue(chunk.Metadata.ChunkingStrategy);
-        w.WritePropertyName("char_count"); w.WriteValue(chunk.Metadata.CharCount);
-        w.WritePropertyName("created_at"); w.WriteValue(chunk.Metadata.CreatedAt.ToString("o"));
-        w.WriteEndObject();
-        w.WriteEndObject();
-    }
-
-    /// <summary>
-    /// Простой stream-писатель JSON без внешних зависимостей.
-    /// </summary>
-    private class JsonStreamWriter
-    {
-        private readonly StreamWriter _w;
-        private int _indent = 0;
-        private bool _needsSeparator = false;
-
-        public JsonStreamWriter(StreamWriter w) => _w = w;
-
-        public void WriteStartObject()
-        {
-            if (_needsSeparator) _w.Write(',');
-            WriteIndent();
-            _w.Write('{');
-            _indent++;
-            _w.WriteLine();
-            _needsSeparator = false;
-        }
-
-        public void WriteEndObject()
-        {
-            _w.WriteLine();
-            _indent--;
-            WriteIndent();
-            _w.Write('}');
-            _needsSeparator = true;
-        }
-
-        public void WriteStartArray()
-        {
-            if (_needsSeparator) _w.Write(',');
-            WriteIndent();
-            _w.Write('[');
-            _indent++;
-            _w.WriteLine();
-            _needsSeparator = false;
-        }
-
-        public void WriteEndArray()
-        {
-            _w.WriteLine();
-            _indent--;
-            WriteIndent();
-            _w.Write(']');
-            _needsSeparator = true;
-        }
-
-        public void WritePropertyName(string name)
-        {
-            if (_needsSeparator) _w.Write(',');
-            _w.Write('"');
-            _w.Write(EscapeJson(name));
-            _w.Write("\": ");
-            _needsSeparator = false;
-        }
-
-        public void WriteValue(string value)
-        {
-            _w.Write('"');
-            _w.Write(EscapeJson(value));
-            _w.Write('"');
-            _needsSeparator = true;
-        }
-
-        public void WriteValue(int value)
-        {
-            _w.Write(value);
-            _needsSeparator = true;
-        }
-        public void WriteValue(long value)
-        {
-            _w.Write(value);
-            _needsSeparator = true;
-        }
-        public void WriteValue(double value)
-        {
-            _w.Write(value);
-            _needsSeparator = true;
-        }
-        public void WriteValue(bool value)
-        {
-            _w.Write(value);
-            _needsSeparator = true;
-        }
-
-        public Task FlushAsync() => _w.FlushAsync();
-
-        private void WriteIndent()
-        {
-            for (var i = 0; i < _indent; i++)
-                _w.Write("  ");
-        }
-
-        private static string EscapeJson(string s)
-        {
-            if (string.IsNullOrEmpty(s)) return string.Empty;
-            var sb = new StringBuilder(s.Length);
-            foreach (var c in s)
-            {
-                sb.Append(c switch
-                {
-                    '"' => "\\\"",
-                    '\\' => "\\\\",
-                    '\n' => "\\n",
-                    '\r' => "\\r",
-                    '\t' => "\\t",
-                    _ => c
-                });
-            }
-            return sb.ToString();
-        }
-    }
 
     /// <summary>
     /// Поиск: загружает эмбеддинги по одному, не читая весь файл.
@@ -393,7 +236,9 @@ public class DocumentIndexer
     {
         Log($"🔍 Поиск: \"{query}\"");
 
-        using var doc = JsonDocument.Parse(await File.ReadAllBytesAsync(indexJsonPath));
+        var jsonBytes = await File.ReadAllBytesAsync(indexJsonPath);
+        jsonBytes = StripUtf8Bom(jsonBytes);
+        using var doc = JsonDocument.Parse(jsonBytes);
         var root = doc.RootElement;
         var chunksJson = root.GetProperty("chunks");
         var chunkCount = chunksJson.GetArrayLength();
@@ -635,6 +480,16 @@ public class DocumentIndexer
     private static string SanitizeName(string name)
     {
         return new string(name.Where(c => char.IsLetterOrDigit(c) || c == '_' || c == '-').ToArray());
+    }
+
+    private static byte[] StripUtf8Bom(byte[] bytes)
+    {
+        // UTF-8 BOM: EF BB BF
+        if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF)
+        {
+            return bytes[3..];
+        }
+        return bytes;
     }
 
     private void Log(string message)
