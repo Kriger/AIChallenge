@@ -112,11 +112,11 @@ public class DocumentIndexer
                 var chunkCount = await StreamIndexAsync(text, file, title, chunkingStrategy, indexFilePath, embProgress);
                 embStopwatch.Stop();
 
-                var embSize = new FileInfo($"{indexFilePath}.bin").Length;
-                totalBytes += embSize;
+                var embSizeBytes = new FileInfo($"{indexFilePath}.bin").Length;
+                totalBytes += embSizeBytes;
                 totalChunks += chunkCount;
 
-                Log($"  ✅ {embStopwatch.ElapsedMilliseconds} мс, {embSize / 1024} KB");
+                Log($"  ✅ {embStopwatch.ElapsedMilliseconds} мс, {embSizeBytes / 1024} KB");
             }
             catch (Exception ex)
             {
@@ -128,7 +128,8 @@ public class DocumentIndexer
         Log("=== Итог ===");
         Log($"  Обработано файлов: {files.Length}");
         Log($"  Всего чанков: {totalChunks}");
-        Log($"  Размер эмбеддингов: {totalBytes / 1024 / 1024} MB");
+        var totalMB = totalBytes / 1024.0 / 1024.0;
+        Log($"  Размер эмбеддингов: {totalBytes / 1024} KB ({totalMB:F2} MB)");
         Log($"  Сохранено в: {outputDir}");
     }
 
@@ -199,7 +200,8 @@ public class DocumentIndexer
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"  ⚠️  Ошибка эмбеддинга чанка {chunkIndex + 1}: {ex.Message}");
+                var msg = $"  ⚠️  Ошибка эмбеддинга чанка {chunkIndex + 1}: {ex.Message}";
+                Log(msg);
             }
 
             chunkIndex++;
@@ -219,6 +221,10 @@ public class DocumentIndexer
 
         var embeddingsArray = embeddings.ToArray();
         await _indexStorage.SaveAsync(index, embeddingsArray, $"{indexFilePath}.bin");
+        
+        // Проверяем, что файл реально записан
+        var binFileInfo = new FileInfo($"{indexFilePath}.bin");
+        Log($"  💾 Бинарный файл: {binFileInfo.Length / 1024} KB ({embeddingsArray.Length} эмбеддингов × {actualDimension} dim)");
 
         return chunks.Count;
     }

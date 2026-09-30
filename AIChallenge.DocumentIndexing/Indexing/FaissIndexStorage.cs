@@ -48,6 +48,7 @@ public class FaissIndexStorage : IIndexStorage
         }
 
         bw.Flush();
+        fs.Flush(true); // true = также очищаем буферы ОС
     }
 
     /// <summary>
