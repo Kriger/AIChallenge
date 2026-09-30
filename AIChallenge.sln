@@ -19,6 +19,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AIChallenge.ScheduledSummar
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AIChallenge.McpPipeline", "AIChallenge.McpPipeline\AIChallenge.McpPipeline.csproj", "{A8B3C7D2-E5F1-4A9B-8C6D-2E7F1A3B5C9D}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AIChallenge.DocumentIndexing", "AIChallenge.DocumentIndexing\AIChallenge.DocumentIndexing.csproj", "{9B4FEECF-03F2-477B-B70D-00D446989F96}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -125,6 +127,18 @@ Global
 		{A8B3C7D2-E5F1-4A9B-8C6D-2E7F1A3B5C9D}.Release|x64.Build.0 = Release|Any CPU
 		{A8B3C7D2-E5F1-4A9B-8C6D-2E7F1A3B5C9D}.Release|x86.ActiveCfg = Release|Any CPU
 		{A8B3C7D2-E5F1-4A9B-8C6D-2E7F1A3B5C9D}.Release|x86.Build.0 = Release|Any CPU
+		{9B4FEECF-03F2-477B-B70D-00D446989F96}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9B4FEECF-03F2-477B-B70D-00D446989F96}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9B4FEECF-03F2-477B-B70D-00D446989F96}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{9B4FEECF-03F2-477B-B70D-00D446989F96}.Debug|x64.Build.0 = Debug|Any CPU
+		{9B4FEECF-03F2-477B-B70D-00D446989F96}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{9B4FEECF-03F2-477B-B70D-00D446989F96}.Debug|x86.Build.0 = Debug|Any CPU
+		{9B4FEECF-03F2-477B-B70D-00D446989F96}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9B4FEECF-03F2-477B-B70D-00D446989F96}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9B4FEECF-03F2-477B-B70D-00D446989F96}.Release|x64.ActiveCfg = Release|Any CPU
+		{9B4FEECF-03F2-477B-B70D-00D446989F96}.Release|x64.Build.0 = Release|Any CPU
+		{9B4FEECF-03F2-477B-B70D-00D446989F96}.Release|x86.ActiveCfg = Release|Any CPU
+		{9B4FEECF-03F2-477B-B70D-00D446989F96}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

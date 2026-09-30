@@ -11,15 +11,17 @@ public sealed class CommandContext
 {
     public ChatAgent Agent { get; }
     public GigaChatConfig Config { get; }
+    public DocumentIndexingConfig DocIndexConfig { get; }
     public TaskStateMachine TaskStateMachine { get; }
     public AgentLogger Logger { get; }
     public RequestCache Cache { get; }
     public MemoryManager MemoryManager { get; }
 
-    public CommandContext(ChatAgent agent, GigaChatConfig config, TaskStateMachine taskStateMachine, AgentLogger logger, RequestCache cache, MemoryManager memoryManager)
+    public CommandContext(ChatAgent agent, GigaChatConfig config, DocumentIndexingConfig docIndexConfig, TaskStateMachine taskStateMachine, AgentLogger logger, RequestCache cache, MemoryManager memoryManager)
     {
         Agent = agent;
         Config = config;
+        DocIndexConfig = docIndexConfig;
         TaskStateMachine = taskStateMachine;
         Logger = logger;
         Cache = cache;

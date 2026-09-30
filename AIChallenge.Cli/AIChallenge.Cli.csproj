@@ -15,6 +15,7 @@
     <ProjectReference Include="..\AIChallenge.Services\AIChallenge.Services.csproj" />
     <ProjectReference Include="..\AIChallenge.Core\AIChallenge.Core.csproj" />
     <ProjectReference Include="..\AIChallenge.McpScheduler\AIChallenge.McpScheduler.csproj" />
+    <ProjectReference Include="..\AIChallenge.DocumentIndexing\AIChallenge.DocumentIndexing.csproj" />
   </ItemGroup>
   <ItemGroup>
     <Using Include="System.Net.Http.Json" />

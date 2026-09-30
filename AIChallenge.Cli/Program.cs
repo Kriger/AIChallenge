@@ -24,6 +24,10 @@ var configuration = builder.Build();
 var config = new GigaChatConfig();
 configuration.GetSection("GigaChat").Bind(config);
 
+// Load DocumentIndexingConfig
+var docIndexConfig = new DocumentIndexingConfig();
+configuration.GetSection("DocumentIndexing").Bind(docIndexConfig);
+
 // Load ContextConfig manually (Binder not available in Models project)
 var ctxOptions = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
 var ctxSection = configuration.GetSection("Context");
@@ -180,7 +184,7 @@ Console.WriteLine("   /fsm load, /fsm history, /fsm dialog, /fsm help");
 Console.WriteLine();
 
 // Регистируем команды
-var ctx = new CommandContext(agent, config, taskStateMachine, logger, cache, memoryManager);
+var ctx = new CommandContext(agent, config, docIndexConfig, taskStateMachine, logger, cache, memoryManager);
 
 // Автоматическая регистрация всех CommandHandler из сборки
 var assembly = typeof(CommandHandler).Assembly;
