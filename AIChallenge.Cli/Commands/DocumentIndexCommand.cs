@@ -35,6 +35,7 @@ public class DocumentIndexCommand : CommandHandler
             case "search": return await SearchDocumentsAsync(parts, ctx);
             case "vectors": return await ShowVectorsAsync(parts, ctx);
             case "list": return await ListDocumentsAsync(parts, ctx);
+            case "clear": return await ClearDocumentsAsync(parts, ctx);
             case "help":
             default:
                 ShowHelp(ctx.DocIndexConfig);
@@ -132,6 +133,9 @@ public class DocumentIndexCommand : CommandHandler
 
             /doc list
               - Показать список проиндексированных документов
+
+            /doc clear
+              - Удалить все проиндексированные документы и эмбеддинги
 
             /doc help
               - Показать справку
@@ -464,39 +468,97 @@ public class DocumentIndexCommand : CommandHandler
             return true;
         }
 
+        // Группируем по документу (safeName)
+        var grouped = indexFiles
+            .Select(f => {
+                var (storage, strategy, safeName) = ParseIndexFileName(f);
+                return (jsonFile: f, storage, strategy, safeName);
+            })
+            .GroupBy(x => x.safeName)
+            .OrderBy(g => g.Key)
+            .ToList();
+
         Console.WriteLine("=== Проиндексированные документы ===\n");
 
-        foreach (var jsonFile in indexFiles)
+        foreach (var group in grouped)
+        {
+            var docName = group.Key;
+            Console.WriteLine($"📁 {docName}");
+            Console.WriteLine(new string('-', 60));
+
+            // Порядок вывода: structural, затем fixed_size
+            foreach (var desiredStrategy in new[] { "structural", "fixed_size" })
+            {
+                var entries = group.Where(x => x.strategy == desiredStrategy).ToList();
+                if (entries.Count == 0) continue;
+                var entry = entries[0];
+
+                try
+                {
+                    using var doc = ParseJsonWithBomHandling(entry.jsonFile);
+                    var root = doc.RootElement;
+
+                    var chunkCount = root.GetProperty("chunk_count").GetInt32();
+                    var chunkingStrategy = root.GetProperty("chunking_strategies")
+                        .EnumerateArray().FirstOrDefault().GetString() ?? "unknown";
+                    var createdAt = root.GetProperty("created_at").GetString() ?? "unknown";
+
+                    var binFile = FindBinFile(indexDir, entry.storage, entry.strategy, entry.safeName);
+                    var binSize = binFile is not null && File.Exists(binFile)
+                        ? $" ({new FileInfo(binFile).Length / 1024} KB)"
+                        : " (эмбеддинги отсутствуют)";
+
+                    Console.WriteLine($"  [{chunkingStrategy,-12}] Чанков: {chunkCount,3} | Размер эмбеддингов: {binSize,-20} Создан: {createdAt}");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"  ⚠️  Ошибка чтения: {ex.Message}");
+                }
+            }
+
+            Console.WriteLine();
+        }
+
+        return true;
+    }
+
+    private async Task<bool> ClearDocumentsAsync(string[] parts, CommandContext ctx)
+    {
+        var indexDir = GetIndexDir(ctx);
+        var jsonFiles = Directory.GetFiles(indexDir, "index_*.json").ToList();
+        var binFiles = Directory.GetFiles(indexDir, "index_*.bin").ToList();
+
+        Console.WriteLine($"🗑️  Удаление проиндексированных документов...");
+        Console.WriteLine($"    JSON-индексов: {jsonFiles.Count}");
+        Console.WriteLine($"    Бинарных файлов: {binFiles.Count}");
+
+        foreach (var file in jsonFiles)
         {
             try
             {
-                using var doc = ParseJsonWithBomHandling(jsonFile);
-                var root = doc.RootElement;
-
-                var chunkCount = root.GetProperty("chunk_count").GetInt32();
-                var chunkingStrategy = root.GetProperty("chunking_strategies")
-                    .EnumerateArray().FirstOrDefault().GetString() ?? "unknown";
-                var createdAt = root.GetProperty("created_at").GetString() ?? "unknown";
-
-                var (storage, strategy, safeName) = ParseIndexFileName(jsonFile);
-                var binFile = FindBinFile(indexDir, storage, strategy, safeName);
-                var binSize = binFile is not null && File.Exists(binFile)
-                    ? $" ({new FileInfo(binFile).Length / 1024} KB)"
-                    : " (эмбеддинги отсутствуют)";
-
-                Console.WriteLine($"📁 {Path.GetFileNameWithoutExtension(jsonFile)}");
-                Console.WriteLine($"   Стратегия: {chunkingStrategy}");
-                Console.WriteLine($"   Чанков: {chunkCount}");
-                Console.WriteLine($"   Размер эмбеддингов: {binSize}");
-                Console.WriteLine($"   Создан: {createdAt}");
-                Console.WriteLine();
+                File.Delete(file);
+                Console.WriteLine($"  ✅ {Path.GetFileName(file)}");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"⚠️  Ошибка чтения {Path.GetFileName(jsonFile)}: {ex.Message}\n");
+                Console.WriteLine($"  ❌ Ошибка удаления {Path.GetFileName(file)}: {ex.Message}");
             }
         }
 
+        foreach (var file in binFiles)
+        {
+            try
+            {
+                File.Delete(file);
+                Console.WriteLine($"  ✅ {Path.GetFileName(file)}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"  ❌ Ошибка удаления {Path.GetFileName(file)}: {ex.Message}");
+            }
+        }
+
+        Console.WriteLine($"\n✅ Удалено файлов: {jsonFiles.Count + binFiles.Count}");
         return true;
     }
 
