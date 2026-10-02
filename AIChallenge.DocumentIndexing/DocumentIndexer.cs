@@ -234,11 +234,12 @@ public class DocumentIndexer
     /// <summary>
     /// Поиск: загружает эмбеддинги по одному, не читая весь файл.
     /// </summary>
-    public async Task<List<(DocumentChunk Chunk, float Distance)>> SearchAsync(
+    public async Task<List<(DocumentChunk Chunk, float Distance, string Strategy)>> SearchAsync(
         string query,
         string indexJsonPath,
         string embeddingsPath,
-        int topK = 5)
+        int topK = 5,
+        string strategy = "unknown")
     {
         Log($"🔍 Поиск: \"{query}\"");
 
@@ -254,7 +255,7 @@ public class DocumentIndexer
 
         // Собираем все чанки с их расстояниями
         var idx = 0;
-        var results = new List<(DocumentChunk Chunk, float Distance)>();
+        var results = new List<(DocumentChunk Chunk, float Distance, string Strategy)>();
 
         await foreach (var embedding in _embeddingProvider.LoadEmbeddingsAsync(embeddingsPath))
         {
@@ -264,7 +265,7 @@ public class DocumentIndexer
 
             if (results.Count < topK * 2 || distance < results.Max(r => r.Distance))
             {
-                results.Add((chunk, distance));
+                results.Add((chunk, distance, strategy));
                 if (results.Count > topK * 2)
                     results.RemoveAt(results.FindIndex(r => r.Distance == results.Max(x => x.Distance)));
             }

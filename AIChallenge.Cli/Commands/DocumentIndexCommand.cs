@@ -53,16 +53,38 @@ public class DocumentIndexCommand : CommandHandler
     }
 
     /// <summary>
-    /// Разбирает имя файла индекса: index_{strategy}_{safeName}.json → (strategy, safeName).
+    /// Разбирает имя файла индекса: index_{storage}_{strategy}_{safeName}.json → (storage, strategy, safeName).
     /// </summary>
-    private static (string strategy, string safeName) ParseIndexFileName(string fileName)
+    private static (string storage, string strategy, string safeName) ParseIndexFileName(string fileName)
     {
         var baseName = Path.GetFileNameWithoutExtension(fileName);
-        var rest = baseName.Substring("index_".Length);
-        var idx = rest.IndexOf('_');
-        var strategy = idx > 0 ? rest.Substring(0, idx) : rest;
-        var safeName = idx > 0 ? rest.Substring(idx + 1) : "";
-        return (strategy, safeName);
+        // baseName = "index_faiss_fixed_size_ContextManagement"
+        var rest = baseName.Substring("index_".Length); // "faiss_fixed_size_ContextManagement"
+        
+        var firstIdx = rest.IndexOf('_');
+        if (firstIdx <= 0) return (rest, "", "");
+        
+        var storage = rest.Substring(0, firstIdx); // "faiss"
+        var rest2 = rest.Substring(firstIdx + 1); // "fixed_size_ContextManagement"
+        
+        // Известные стратегии (могут содержать _)
+        var knownStrategies = new[] { "fixed_size", "structural" };
+        
+        foreach (var known in knownStrategies)
+        {
+            var prefix = known + "_";
+            if (rest2.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                var safeName = rest2.Substring(prefix.Length);
+                return (storage, known, safeName);
+            }
+        }
+        
+        // Fallback: если стратегия не известна
+        var secondIdx = rest2.IndexOf('_');
+        var strategy = secondIdx > 0 ? rest2.Substring(0, secondIdx) : rest2;
+        var safeNameFallback = secondIdx > 0 ? rest2.Substring(secondIdx + 1) : "";
+        return (storage, strategy, safeNameFallback);
     }
 
     private static List<string> GetIndexFiles(string indexDir)
@@ -70,8 +92,8 @@ public class DocumentIndexCommand : CommandHandler
             .OrderByDescending(f => File.GetLastWriteTime(f))
             .ToList();
 
-    private static string? FindBinFile(string indexDir, string strategy, string safeName)
-        => Directory.GetFiles(indexDir, $"index_{strategy}_{safeName}.bin").FirstOrDefault();
+    private static string? FindBinFile(string indexDir, string storage, string strategy, string safeName)
+        => Directory.GetFiles(indexDir, $"index_{storage}_{strategy}_{safeName}.bin").FirstOrDefault();
 
     private static byte[] StripUtf8Bom(byte[] bytes)
     {
@@ -247,15 +269,15 @@ public class DocumentIndexCommand : CommandHandler
         }
     }
 
-    private async Task<bool> SearchDocumentsAsync(string[] parts, CommandContext ctx)
+    private async Task<bool> SearchDocumentsAsync(string[] commandParts, CommandContext ctx)
     {
-        if (parts.Length < 3)
+        if (commandParts.Length < 3)
         {
             Console.WriteLine("❌ Укажите запрос: /doc search <query>");
             return true;
         }
 
-        var query = string.Join(" ", parts.Skip(2));
+        var query = string.Join(" ", commandParts.Skip(2));
         var indexDir = GetIndexDir(ctx);
         var indexFiles = GetIndexFiles(indexDir);
 
@@ -265,8 +287,8 @@ public class DocumentIndexCommand : CommandHandler
             return true;
         }
 
-        var allResults = new List<(DocumentChunk Chunk, float Distance)>();
         var embeddingProvider = CreateEmbeddingProvider(ctx);
+        var allResults = new List<(DocumentChunk Chunk, float Distance, string Strategy, string SafeName)>();
 
         try
         {
@@ -274,38 +296,84 @@ public class DocumentIndexCommand : CommandHandler
 
             foreach (var jsonFile in indexFiles)
             {
-                var (strategy, safeName) = ParseIndexFileName(jsonFile);
-                var binFile = FindBinFile(indexDir, strategy, safeName);
+                var (storage, strategy, safeName) = ParseIndexFileName(jsonFile);
+                var binFile = FindBinFile(indexDir, storage, strategy, safeName);
                 if (binFile == null) continue;
 
-                var results = await indexer.SearchAsync(query, jsonFile, binFile, topK: ctx.DocIndexConfig.SearchTopK);
-                allResults.AddRange(results);
+                var results = await indexer.SearchAsync(query, jsonFile, binFile, topK: ctx.DocIndexConfig.SearchTopK, strategy);
+                foreach (var (chunk, distance, strat) in results)
+                {
+                    allResults.Add((chunk, distance, strat, safeName));
+                }
             }
 
-            allResults.Sort((a, b) => a.Distance.CompareTo(b.Distance));
+            // Фильтрация по порогу
             allResults = allResults
                 .Where(r => (1.0f - r.Distance) >= ctx.DocIndexConfig.MinSimilarity)
-                .Take(ctx.DocIndexConfig.SearchTopK)
+                .ToList();
+
+            // Группировка по документу
+            var grouped = allResults
+                .GroupBy(r => r.SafeName)
+                .OrderBy(g => g.Key)
                 .ToList();
 
             Console.WriteLine($"\n=== Результаты поиска ===\n  Порог схожести: {ctx.DocIndexConfig.MinSimilarity:F2}\n");
 
-            if (allResults.Count == 0)
+            if (grouped.Count == 0)
             {
                 Console.WriteLine($"  Ничего не найдено (нет результатов с схожестью >= {ctx.DocIndexConfig.MinSimilarity})");
                 return true;
             }
 
-            for (var i = 0; i < allResults.Count; i++)
+            foreach (var group in grouped)
             {
-                var (chunk, distance) = allResults[i];
-                var similarity = 1.0f - distance;
-                var preview = chunk.Text.Length > 200 ? chunk.Text[..200] + "..." : chunk.Text;
+                var docName = group.Key;
+                var strategyGroups = group.GroupBy(r => r.Strategy)
+                    .OrderBy(g => g.Key)
+                    .Select(g => g.ToList())
+                    .ToList();
 
-                Console.WriteLine($"#{i + 1} (Схожесть: {similarity:F3})");
-                Console.WriteLine($"   Источник: {chunk.Metadata.Source}");
-                Console.WriteLine($"   Раздел: {chunk.Metadata.Section}");
-                Console.WriteLine($"   Текст: {preview}");
+                Console.WriteLine($"📁 {docName}");
+                Console.WriteLine(new string('-', 70));
+
+                // Определяем максимальное количество результатов среди стратегий для выравнивания
+                var maxResults = strategyGroups.Max(g => g.Count);
+
+                for (var i = 0; i < maxResults; i++)
+                {
+                    var lines = new string[strategyGroups.Count];
+                    var hasResult = false;
+
+                    for (var s = 0; s < strategyGroups.Count; s++)
+                    {
+                        if (i < strategyGroups[s].Count)
+                        {
+                            hasResult = true;
+                            var result = strategyGroups[s][i];
+                            var similarity = 1.0f - result.Distance;
+                            var preview = result.Chunk.Text.Length > 150 ? result.Chunk.Text[..150] + "..." : result.Chunk.Text;
+                            var section = string.IsNullOrWhiteSpace(result.Chunk.Metadata.Section) ? "-" : result.Chunk.Metadata.Section;
+                            lines[s] = $"  [{result.Strategy,-12}] {similarity:F3} | {section}\n           \"{preview}\"";
+                        }
+                        else
+                        {
+                            lines[s] = "";
+                        }
+                    }
+
+                    if (hasResult)
+                    {
+                        foreach (var line in lines)
+                        {
+                            if (!string.IsNullOrEmpty(line))
+                                Console.WriteLine(line);
+                        }
+                        Console.WriteLine();
+                    }
+                }
+
+                Console.WriteLine(new string('=', 70));
                 Console.WriteLine();
             }
         }
@@ -351,8 +419,8 @@ public class DocumentIndexCommand : CommandHandler
 
                 Console.WriteLine($"  Провайдер: {provider}, Размерность: {dimension}, Чанков: {chunkCount}");
 
-                var (strategy, safeName) = ParseIndexFileName(jsonFile);
-                var binFile = FindBinFile(indexDir, strategy, safeName);
+                var (storage, strategy, safeName) = ParseIndexFileName(jsonFile);
+                var binFile = FindBinFile(indexDir, storage, strategy, safeName);
                 if (binFile == null)
                 {
                     Console.WriteLine("  ⚠️  Эмбеддинги не найдены\n");
@@ -406,18 +474,18 @@ public class DocumentIndexCommand : CommandHandler
                 var root = doc.RootElement;
 
                 var chunkCount = root.GetProperty("chunk_count").GetInt32();
-                var strategy = root.GetProperty("chunking_strategies")
+                var chunkingStrategy = root.GetProperty("chunking_strategies")
                     .EnumerateArray().FirstOrDefault().GetString() ?? "unknown";
                 var createdAt = root.GetProperty("created_at").GetString() ?? "unknown";
 
-                var (s, safeName) = ParseIndexFileName(jsonFile);
-                var binFile = FindBinFile(indexDir, s, safeName);
+                var (storage, strategy, safeName) = ParseIndexFileName(jsonFile);
+                var binFile = FindBinFile(indexDir, storage, strategy, safeName);
                 var binSize = binFile is not null && File.Exists(binFile)
                     ? $" ({new FileInfo(binFile).Length / 1024} KB)"
                     : " (эмбеддинги отсутствуют)";
 
                 Console.WriteLine($"📁 {Path.GetFileNameWithoutExtension(jsonFile)}");
-                Console.WriteLine($"   Стратегия: {strategy}");
+                Console.WriteLine($"   Стратегия: {chunkingStrategy}");
                 Console.WriteLine($"   Чанков: {chunkCount}");
                 Console.WriteLine($"   Размер эмбеддингов: {binSize}");
                 Console.WriteLine($"   Создан: {createdAt}");
