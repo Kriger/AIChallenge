@@ -34,6 +34,7 @@ public class StructuralChunking : IChunkingStrategy
 
     /// <summary>
     /// Разбивает текст на чанки по структуре (заголовкам/разделам).
+    /// Каждый чанк обогащается контекстом: заголовок документа, название раздела.
     /// </summary>
     public IEnumerable<DocumentChunk> Chunk(string text, string source, string title, string section = "")
     {
@@ -59,6 +60,8 @@ public class StructuralChunking : IChunkingStrategy
             }
             else if (sectionText.Length >= _minChunkSize)
             {
+                // Обогащаем чанк контекстом
+                var enrichedText = EnrichWithContext(title, sectionTitle, sectionText);
                 var metadata = new ChunkMetadata
                 {
                     Source = source,
@@ -70,12 +73,38 @@ public class StructuralChunking : IChunkingStrategy
                     CreatedAt = DateTime.UtcNow,
                 };
 
-                chunks.Add(DocumentChunk.Create(sectionText.Trim(), metadata));
+                chunks.Add(DocumentChunk.Create(enrichedText, metadata));
                 chunkIndex++;
             }
         }
 
         return chunks;
+    }
+
+    /// <summary>
+    /// Обогащает текст чанка контекстом: заголовок документа + название раздела.
+    /// Это критично для поиска — чанк должен содержать ключевые слова из заголовка.
+    /// </summary>
+    private static string EnrichWithContext(string documentTitle, string sectionTitle, string text)
+    {
+        var parts = new List<string>();
+
+        // Заголовок документа как H1
+        if (!string.IsNullOrWhiteSpace(documentTitle))
+        {
+            parts.Add($"# {documentTitle}");
+        }
+
+        // Заголовок раздела как H2
+        if (!string.IsNullOrWhiteSpace(sectionTitle))
+        {
+            parts.Add($"## {sectionTitle}");
+        }
+
+        // Тело раздела
+        parts.Add(text.Trim());
+
+        return string.Join("\n\n", parts);
     }
 
     /// <summary>
@@ -148,6 +177,7 @@ public class StructuralChunking : IChunkingStrategy
 
     /// <summary>
     /// Разбивает большой раздел на части фиксированного размера.
+    /// Каждый под-чанк обогащается контекстом.
     /// </summary>
     private DocumentChunk[] SplitLargeSection(string text, string source, string title, string sectionTitle)
     {
@@ -172,6 +202,9 @@ public class StructuralChunking : IChunkingStrategy
                 }
             }
 
+            // Обогащаем контекстом
+            var enrichedText = EnrichWithContext(title, sectionTitle, chunkText);
+
             var metadata = new ChunkMetadata
             {
                 Source = source,
@@ -183,7 +216,7 @@ public class StructuralChunking : IChunkingStrategy
                 CreatedAt = DateTime.UtcNow,
             };
 
-            chunks.Add(DocumentChunk.Create(chunkText, metadata));
+            chunks.Add(DocumentChunk.Create(enrichedText, metadata));
             localChunkIndex++;
             startIndex = endIndex - overlap;
 

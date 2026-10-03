@@ -1,4 +1,5 @@
 using AIChallenge.DocumentIndexing.Models;
+using System.Collections.Generic;
 
 namespace AIChallenge.DocumentIndexing.Chunking;
 
@@ -36,6 +37,7 @@ public class FixedSizeChunking : IChunkingStrategy
 
     /// <summary>
     /// Разбивает текст на чанки фиксированного размера.
+    /// Каждый чанк обогащается контекстом: заголовок документа + название раздела.
     /// </summary>
     public IEnumerable<DocumentChunk> Chunk(string text, string source, string title, string section = "")
     {
@@ -45,6 +47,9 @@ public class FixedSizeChunking : IChunkingStrategy
         var totalChunks = (int)Math.Ceiling((double)text.Length / (_chunkSize - _overlap));
         var startIndex = 0;
         var chunkIndex = 0;
+
+        // Формируем префикс контекста один раз
+        var contextPrefix = BuildContextPrefix(title, section);
 
         while (startIndex < text.Length)
         {
@@ -62,8 +67,10 @@ public class FixedSizeChunking : IChunkingStrategy
                 }
             }
 
-            // Создаём чанк сразу — не накапливаем в список
-            yield return DocumentChunk.Create(chunkText, new ChunkMetadata
+            // Обогащаем чанк контекстом
+            var enrichedText = contextPrefix + "\n\n" + chunkText.Trim();
+
+            yield return DocumentChunk.Create(enrichedText, new ChunkMetadata
             {
                 Source = source,
                 Title = title,
@@ -83,5 +90,21 @@ public class FixedSizeChunking : IChunkingStrategy
             if (startIndex >= text.Length)
                 break;
         }
+    }
+
+    /// <summary>
+    /// Формирует префикс контекста для чанка.
+    /// </summary>
+    private static string BuildContextPrefix(string documentTitle, string sectionTitle)
+    {
+        var parts = new List<string>();
+
+        if (!string.IsNullOrWhiteSpace(documentTitle))
+            parts.Add($"# {documentTitle}");
+
+        if (!string.IsNullOrWhiteSpace(sectionTitle))
+            parts.Add($"## {sectionTitle}");
+
+        return string.Join("\n", parts);
     }
 }

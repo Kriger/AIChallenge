@@ -1,6 +1,4 @@
 using AIChallenge.Cli.Commands;
-using AIChallenge.DocumentIndexing;
-using AIChallenge.DocumentIndexing.Embeddings;
 using AIChallenge.DocumentIndexing.Models;
 using AIChallenge.McpScheduler;
 using AIChallenge.Models;
@@ -47,14 +45,6 @@ public class RagCommand : CommandHandler
         Console.WriteLine("🔍 Шаг 1/4: Поиск чанков...");
         var searchResults = await SearchAllIndexesAsync(question, indexDir, indexFiles, ctx);
 
-        // Fallback: если семантический поиск не нашёл ничего, ищем по ключевым словам
-        if (searchResults.Count == 0)
-        {
-            Console.WriteLine("  Семантический поиск не дал результатов, пробую поиск по ключевым словам...");
-            searchResults = await SearchByKeywordsAsync(question, indexDir, indexFiles, ctx);
-            Console.WriteLine($"  Ключевые слова: {string.Join(", ", ExtractKeywords(question))}");
-        }
-
         if (searchResults.Count == 0)
         {
             Console.WriteLine("⚠️  Результаты поиска пустые.");
@@ -69,6 +59,20 @@ public class RagCommand : CommandHandler
         // Формируем контекст из чанков
         var ragContext = BuildRagContext(searchResults);
 
+        // Показываем, какие чанки нашлись (диагностика)
+        Console.WriteLine("📦 Найденные чанки (схожесть, документ, текст):");
+        Console.WriteLine(new string('-', 80));
+        foreach (var (chunk, distance, strategy, safeName) in searchResults)
+        {
+            var similarity = 1.0f - distance;
+            var preview = chunk.Text.Length > 150 ? chunk.Text[..150] + "..." : chunk.Text;
+            Console.WriteLine($"  [{similarity:F3}] [{safeName}] [{strategy}]");
+            Console.WriteLine($"    {preview}");
+            Console.WriteLine();
+        }
+        Console.WriteLine(new string('-', 80));
+        Console.WriteLine();
+
         Console.WriteLine("📋 Шаг 2/4: Ответ БЕЗ RAG (вопрос → LLM)...");
         var answerWithoutRag = await CallLlmAsync(
             ctx.Config,
@@ -77,34 +81,18 @@ public class RagCommand : CommandHandler
             question,
             temperature: 0.3);
 
-        // Показываем, какие чанки попали в контекст
-        Console.WriteLine("📦 Контекст для RAG (найденные чанки):");
-        Console.WriteLine(new string('-', 80));
-        foreach (var (chunk, distance, strategy, safeName) in searchResults)
-        {
-            var similarity = 1.0f - distance;
-            Console.WriteLine($"  [Схожесть: {similarity:F3}] [{safeName}] [{strategy}]");
-            Console.WriteLine($"  {chunk.Text}");
-            Console.WriteLine();
-        }
-        Console.WriteLine(new string('-', 80));
-        Console.WriteLine();
-
         Console.WriteLine("📚 Шаг 3/4: Ответ С RAG (вопрос + чанки → LLM)...");
         var ragPrompt = $"""
             === РОЛЬ ===
-            Ты — аналитик, который отвечает на вопросы, основываясь ТОЛЬКО на предоставленных документах.
+            Ты — аналитик, который отвечает на вопросы на основе предоставленных документов.
 
-            === СТРОГИЕ ПРАВИЛА ===
-            1. ОТВЕЧАЙ ТОЛЬКО на основе информации из документов ниже.
-            2. НЕ используй свои внешние знания. НЕ добавляй информацию, которой нет в документах.
-            3. Если ответ есть в документах — приведи его.
-            4. Если ответ есть частично — скажи, что именно найдено.
-            5. Если документы НЕ содержат ответа на вопрос — напиши: "В предоставленных документах нет информации об этом."
-
-            === ВАЖНО ===
-            Если в документах ЕСТЬ ответ — ты ОБЯЗАН его использовать.
-            Если ты напишешь "нет информации", хотя ответ есть в документах — это ОШИБКА.
+            === ИНСТРУКЦИИ ===
+            1. Прочитай все документы ниже внимательно.
+            2. Найди информацию, которая отвечает на вопрос пользователя.
+            3. Ответь на вопрос, используя информацию из документов.
+            4. Если ответ есть в документах — приведи его подробно.
+            5. Если ответ есть частично — скажи, что именно найдено.
+            6. Если документы НЕ содержат ответа — напиши: "В предоставленных документах нет информации об этом."
 
             === ДОКУМЕНТЫ ===
             {ragContext}
@@ -119,7 +107,7 @@ public class RagCommand : CommandHandler
         var answerWithRag = await CallLlmAsync(
             ctx.Config,
             ragPrompt,
-            "Ты — аналитик, отвечающий строго по документам.",
+            "Ты — аналитик, отвечающий на вопросы на основе документов.",
             question,
             temperature: 0.1,
             maxTokens: 4096);
@@ -145,46 +133,211 @@ public class RagCommand : CommandHandler
     private async Task<List<(DocumentChunk Chunk, float Distance, string Strategy, string SafeName)>> SearchAllIndexesAsync(
         string query, string indexDir, List<string> indexFiles, CommandContext ctx)
     {
-        var embeddingProvider = new OllamaEmbeddingProvider(
-            ctx.DocIndexConfig.OllamaUrl, ctx.DocIndexConfig.OllamaEmbeddingModel);
+        Console.WriteLine($"  Сканирую {indexFiles.Count} индекс(ов)...");
 
-        try
+        var allChunks = new List<(DocumentChunk Chunk, float Distance, string Strategy, string SafeName)>();
+        var keywords = ExtractKeywords(query);
+        var phrases = ExtractPhrases(query);
+        var totalChunks = 0;
+
+        Console.WriteLine($"  Ключевые слова: {string.Join(", ", keywords)}");
+        if (phrases.Count > 0)
+            Console.WriteLine($"  Фразы: {string.Join(", ", phrases)}");
+
+        foreach (var jsonFile in indexFiles)
         {
-            var allResults = new List<(DocumentChunk Chunk, float Distance, string Strategy, string SafeName)>();
-            var indexer = new DocumentIndexer(embeddingProvider);
+            var (storage, strategy, safeName) = ParseIndexFileName(jsonFile);
+            var chunkCount = 0;
 
-            // Увеличиваем topK для лучшего покрытия — ищем больше чанков на индекс
-            var topKPerIndex = Math.Max(ctx.DocIndexConfig.SearchTopK * 5, 25);
-
-            foreach (var jsonFile in indexFiles)
+            try
             {
-                var (storage, strategy, safeName) = ParseIndexFileName(jsonFile);
-                var binFile = FindBinFile(indexDir, storage, strategy, safeName);
-                if (binFile == null) continue;
+                var bytes = File.ReadAllBytes(jsonFile);
+                bytes = StripUtf8Bom(bytes);
+                using var doc = JsonDocument.Parse(bytes);
+                var root = doc.RootElement;
+                var chunksJson = root.GetProperty("chunks");
+                chunkCount = chunksJson.GetArrayLength();
+                totalChunks += chunkCount;
 
-                var results = await indexer.SearchAsync(
-                    query, jsonFile, binFile,
-                    topK: topKPerIndex, strategy);
-
-                foreach (var (chunk, distance, strat) in results)
+                for (var i = 0; i < chunkCount; i++)
                 {
-                    allResults.Add((chunk, distance, strat, safeName));
+                    var chunkJson = chunksJson[i];
+                    var text = chunkJson.GetProperty("text").GetString() ?? "";
+                    var title = chunkJson.GetProperty("metadata").GetProperty("title").GetString() ?? "";
+                    var source = chunkJson.GetProperty("metadata").GetProperty("source").GetString() ?? "";
+                    var section = chunkJson.GetProperty("metadata").GetProperty("section").GetString() ?? "";
+
+                    if (string.IsNullOrWhiteSpace(text)) continue;
+
+                    var score = ComputeRelevanceScore(text, title, query, keywords, phrases);
+
+                    if (score > 0)
+                    {
+                        var chunk = new DocumentChunk
+                        {
+                            Id = chunkJson.GetProperty("id").GetString() ?? "",
+                            Text = text,
+                            Metadata = new ChunkMetadata
+                            {
+                                Source = source,
+                                Title = title,
+                                Section = section,
+                                ChunkId = chunkJson.GetProperty("metadata").GetProperty("chunk_id").GetString() ?? "",
+                            },
+                        };
+                        allChunks.Add((chunk, 1.0f - score, strategy, safeName));
+                    }
                 }
             }
-
-            // Берём топ-K уникальных по тексту чанков (убираем дубликаты от overlap)
-            var seenTexts = new HashSet<string>();
-            var deduped = allResults
-                .Where(r => seenTexts.Add(r.Chunk.Text))
-                .Take(ctx.DocIndexConfig.SearchTopK * 3)
-                .ToList();
-
-            return deduped;
+            catch (Exception ex)
+            {
+                Console.WriteLine($"  ⚠️  Ошибка чтения {jsonFile}: {ex.Message}");
+            }
         }
-        finally
+
+        Console.WriteLine($"  Всего чанков в индексах: {totalChunks}, найдено релевантных: {allChunks.Count}");
+
+        // Сортируем по score (по убыванию) и берём топ-K
+        allChunks.Sort((a, b) => a.Distance.CompareTo(b.Distance));
+
+        var seenTexts = new HashSet<string>();
+        var deduped = allChunks
+            .Where(r => seenTexts.Add(r.Chunk.Text))
+            .Take(ctx.DocIndexConfig.SearchTopK * 5)
+            .ToList();
+
+        return deduped;
+    }
+
+    private static float ComputeRelevanceScore(string text, string title, string query, List<string> keywords, List<string> phrases)
+    {
+        var textLower = text.ToLowerInvariant();
+        var queryLower = query.ToLowerInvariant();
+        var titleLower = title.ToLowerInvariant();
+
+        float score = 0f;
+
+        // 1. Точное совпадение всей фразы из вопроса (самый сильный сигнал)
+        foreach (var phrase in phrases)
         {
-            embeddingProvider.Dispose();
+            if (textLower.Contains(phrase.ToLowerInvariant()))
+            {
+                score += 0.4f;
+            }
         }
+
+        // 2. Точные совпадения ключевых слов
+        int exactMatches = 0;
+        foreach (var kw in keywords)
+        {
+            if (textLower.Contains(kw.ToLowerInvariant()))
+            {
+                exactMatches++;
+                score += 0.08f;
+            }
+        }
+
+        // 3. Морфологические вариации (суффиксы)
+        int morphMatches = 0;
+        foreach (var kw in keywords)
+        {
+            if (exactMatches > 0) continue; // Уже посчитали точное совпадение
+            var found = false;
+            foreach (var suffix in new[] { "ия", "ии", "ий", "ие", "ых", "ых", "ам", "ям", "ой", "ом", "ых", "ях", "ами", "ями", "ость", "ости", "остей" })
+            {
+                if (textLower.Contains(kw.ToLowerInvariant() + suffix) || textLower.Contains(kw.ToLowerInvariant().Substring(0, Math.Min(4, kw.Length)) + suffix))
+                {
+                    found = true;
+                    break;
+                }
+            }
+            if (found)
+            {
+                morphMatches++;
+                score += 0.05f;
+            }
+        }
+
+        // 4. Совпадение в заголовке чанка
+        if (!string.IsNullOrEmpty(titleLower))
+        {
+            foreach (var kw in keywords)
+            {
+                if (titleLower.Contains(kw.ToLowerInvariant()))
+                {
+                    score += 0.15f;
+                    break;
+                }
+            }
+        }
+
+        // 5. Штраф за слишком короткие чанки (менее 50 символов)
+        if (text.Length < 50)
+        {
+            score *= 0.3f;
+        }
+
+        // 6. Бонус за плотность совпадений
+        if (keywords.Count > 0 && exactMatches > 0)
+        {
+            var density = (float)exactMatches / keywords.Count;
+            if (density > 0.5f)
+            {
+                score += 0.1f; // Бонус за высокую плотность
+            }
+        }
+
+        // Нормализуем score в диапазон [0, 1]
+        return Math.Min(1.0f, score);
+    }
+
+    private static List<string> ExtractPhrases(string text)
+    {
+        // Извлекаем фразы из вопроса — длинные последовательности слов (> 2 слов)
+        var words = text.ToLowerInvariant()
+            .Replace("?", " ")
+            .Replace("!", " ")
+            .Split(new[] { ' ', '\t', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
+            .Where(w => w.Length > 1)
+            .ToList();
+
+        var phrases = new List<string>();
+
+        // Фразы из 2-4 слов
+        for (var len = 2; len <= 4 && len <= words.Count; len++)
+        {
+            for (var i = 0; i <= words.Count - len; i++)
+            {
+                var phrase = string.Join(" ", words.Skip(i).Take(len));
+                if (phrase.Split(' ').Length >= 2)
+                {
+                    phrases.Add(phrase);
+                }
+            }
+        }
+
+        return phrases.Distinct().ToList();
+    }
+
+    private static List<string> ExtractKeywords(string text)
+    {
+        var stopWords = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "какие", "какая", "какой", "что", "как", "где", "почему", "когда",
+            "в", "из", "с", "на", "и", "или", "не", "к", "у", "о", "при",
+            "three", "what", "how", "where", "why", "when", "which", "are",
+            "the", "a", "an", "is", "was", "were", "of", "for", "with", "on",
+            "at", "by", "from", "as", "into", "through", "their", "been",
+            "других", "другие", "также", "ещё", "более", "между",
+        };
+
+        return text.ToLowerInvariant()
+            .Replace("?", " ")
+            .Replace("!", " ")
+            .Split(new[] { ' ', '\t', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
+            .Where(w => w.Length > 2 && !stopWords.Contains(w))
+            .Distinct()
+            .ToList();
     }
 
     private static (string storage, string strategy, string safeName) ParseIndexFileName(string fileName)
@@ -219,103 +372,6 @@ public class RagCommand : CommandHandler
     private static string? FindBinFile(string indexDir, string storage, string strategy, string safeName)
         => Directory.GetFiles(indexDir, $"index_{storage}_{strategy}_{safeName}.bin").FirstOrDefault();
 
-    /// <summary>
-    /// Fallback-поиск по ключевым словам: загружает все чанки из индексов,
-    /// фильтрует по наличию ключевых слов в тексте.
-    /// </summary>
-    private async Task<List<(DocumentChunk Chunk, float Distance, string Strategy, string SafeName)>> SearchByKeywordsAsync(
-        string query, string indexDir, List<string> indexFiles, CommandContext ctx)
-    {
-        var results = new List<(DocumentChunk Chunk, float Distance, string Strategy, string SafeName)>();
-
-        // Извлекаем ключевые слова из запроса
-        var keywords = ExtractKeywords(query);
-        if (keywords.Count == 0) return results;
-
-        foreach (var jsonFile in indexFiles)
-        {
-            var (storage, strategy, safeName) = ParseIndexFileName(jsonFile);
-
-            try
-            {
-                using var doc = ParseJsonWithBomHandling(jsonFile);
-                var root = doc.RootElement;
-                var chunksJson = root.GetProperty("chunks");
-                var chunkCount = chunksJson.GetArrayLength();
-
-                for (var i = 0; i < chunkCount; i++)
-                {
-                    var chunkJson = chunksJson[i];
-                    var text = chunkJson.GetProperty("text").GetString() ?? "";
-                    var source = chunkJson.GetProperty("metadata").GetProperty("source").GetString() ?? "";
-
-                    // Считаем, сколько ключевых слов найдено в чанке
-                    var keywordMatches = keywords.Count(kw =>
-                        text.Contains(kw, StringComparison.OrdinalIgnoreCase));
-
-                    if (keywordMatches > 0)
-                    {
-                        // Вычисляем score: чем больше ключевых слов найдено, тем выше score
-                        var score = Math.Min(1.0f, keywordMatches * 0.3f);
-                        var distance = 1.0f - score;
-
-                        var chunk = new DocumentChunk
-                        {
-                            Id = chunkJson.GetProperty("id").GetString() ?? "",
-                            Text = text,
-                            Metadata = new ChunkMetadata
-                            {
-                                Source = source,
-                                Title = chunkJson.GetProperty("metadata").GetProperty("title").GetString() ?? "",
-                                Section = chunkJson.GetProperty("metadata").GetProperty("section").GetString() ?? "",
-                                ChunkId = chunkJson.GetProperty("metadata").GetProperty("chunk_id").GetString() ?? "",
-                            },
-                        };
-
-                        results.Add((chunk, distance, strategy, safeName));
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"  ⚠️  Ошибка чтения {jsonFile}: {ex.Message}");
-            }
-        }
-
-        // Сортируем по score (по убыванию) и берём топ-K
-        results.Sort((a, b) => a.Distance.CompareTo(b.Distance));
-        return results.Take(ctx.DocIndexConfig.SearchTopK * 3).ToList();
-    }
-
-    private static List<string> ExtractKeywords(string text)
-    {
-        var stopWords = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "какие", "какая", "какой", "что", "как", "где", "почему", "когда",
-            "в", "из", "с", "на", "и", "или", "не", "к", "у", "о", "при",
-            "three", "what", "how", "where", "why", "when", "which", "are",
-            "the", "a", "an", "is", "are", "was", "were", "of", "in", "to",
-            "for", "with", "on", "at", "by", "from", "as", "into", "through"
-        };
-
-        var words = text.ToLowerInvariant()
-            .Replace("?", " ")
-            .Replace("!", " ")
-            .Split(new[] { ' ', '\t', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
-            .Where(w => w.Length > 2 && !stopWords.Contains(w))
-            .Distinct()
-            .ToList();
-
-        return words;
-    }
-
-    private JsonDocument ParseJsonWithBomHandling(string filePath)
-    {
-        var bytes = File.ReadAllBytes(filePath);
-        bytes = StripUtf8Bom(bytes);
-        return JsonDocument.Parse(bytes);
-    }
-
     private static byte[] StripUtf8Bom(byte[] bytes)
     {
         if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF)
@@ -327,7 +383,7 @@ public class RagCommand : CommandHandler
     {
         var sb = new StringBuilder();
 
-        // Сортируем по схожести (по убыванию)
+        // Сортируем по схожести (по убыванию) — лучшие чанки первыми
         var sorted = results
             .OrderByDescending(r => 1.0f - r.Distance)
             .ToList();

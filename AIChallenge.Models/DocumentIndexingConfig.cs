@@ -29,7 +29,7 @@ public class DocumentIndexingConfig
     /// <summary>
     /// Минимальная схожесть для отображения результата поиска (0.0 — 1.0).
     /// </summary>
-    public float MinSimilarity { get; set; } = 0.70f;
+    public float MinSimilarity { get; set; } = 0.50f;
 
     /// <summary>
     /// Максимальный размер текстового файла (байт). По умолчанию 5 МБ.
@@ -65,12 +65,12 @@ public class DocumentIndexingConfig
     /// <summary>
     /// Размер чанка для FixedSizeChunking (символы).
     /// </summary>
-    public int ChunkSize { get; set; } = 500;
+    public int ChunkSize { get; set; } = 1000;
 
     /// <summary>
     /// Перекрытие чанков для FixedSizeChunking (символы).
     /// </summary>
-    public int ChunkOverlap { get; set; } = 50;
+    public int ChunkOverlap { get; set; } = 100;
 
     /// <summary>
     /// Максимальное количество файлов для сравнения стратегий.
