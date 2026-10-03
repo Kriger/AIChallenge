@@ -86,4 +86,28 @@ public class DocumentIndexingConfig
     /// Размер буфера чтения текста (байты).
     /// </summary>
     public int ReadTextBufferSize { get; set; } = 4096;
+
+    // ==================== RAG Reranker Config ====================
+
+    /// <summary>
+    /// Коэффициент расширения для начального поиска (множитель SearchTopK).
+    /// Поиск берёт TopK * ExpandFactor результатов, затем работает фильтр.
+    /// </summary>
+    public int RagExpandFactor { get; set; } = 5;
+
+    /// <summary>
+    /// Минимальный порог релевантности (0.0 — 1.0).
+    /// Чанки с similarity ниже этого порога отбрасываются на этапе фильтрации.
+    /// </summary>
+    public float RagMinRelevanceScore { get; set; } = 0.15f;
+
+    /// <summary>
+    /// Количество результатов после фильтрации (топ-K релевантных чанков для RAG).
+    /// </summary>
+    public int RagReRankTopK { get; set; } = 5;
+
+    /// <summary>
+    /// Включить показ статистики фильтрации в выводе.
+    /// </summary>
+    public bool RagShowFilterStats { get; set; } = true;
 }

@@ -42,7 +42,7 @@ public class RagCommand : CommandHandler
             return true;
         }
 
-        Console.WriteLine("🔍 Шаг 1/4: Поиск чанков...");
+        Console.WriteLine("🔍 Шаг 1/3: Поиск чанков...");
         var searchResults = await SearchAllIndexesAsync(question, indexDir, indexFiles, ctx);
 
         if (searchResults.Count == 0)
@@ -51,13 +51,39 @@ public class RagCommand : CommandHandler
             return true;
         }
 
-        // Сортируем по схожести (по убыванию)
-        searchResults.Sort((a, b) => b.Distance.CompareTo(a.Distance));
-
         Console.WriteLine($"   Найдено {searchResults.Count} чанков\n");
 
-        // Формируем контекст из чанков
-        var ragContext = BuildRagContext(searchResults);
+        // ===== Этап 2: Reranker / фильтр релевантности =====
+        Console.WriteLine("🎯 Шаг 2/3: Фильтрация релевантности...");
+        var expandFactor = ctx.DocIndexConfig.RagExpandFactor;
+        var minSimilarity = ctx.DocIndexConfig.RagMinRelevanceScore;
+        var reRankTopK = ctx.DocIndexConfig.RagReRankTopK;
+
+        Console.WriteLine($"   ExpandFactor: {expandFactor} | Порог: {minSimilarity:F2} | Top-K после фильтра: {reRankTopK}");
+
+        var (filteredResults, rejectedResults, totalBefore, totalAfter, minKeptSim, maxRejectSim) =
+            RerankAndFilter(searchResults, minSimilarity, reRankTopK);
+
+        if (ctx.DocIndexConfig.RagShowFilterStats && rejectedResults.Count > 0)
+        {
+            Console.WriteLine($"   ✅ Отобрано: {totalAfter} чанков (из {totalBefore})");
+            Console.WriteLine($"   ❌ Отброшено: {rejectedResults.Count} чанков (similarity < {minSimilarity:F2})");
+
+            if (maxRejectSim.HasValue)
+                Console.WriteLine($"   📉 Макс. similarity среди отброшенных: {maxRejectSim.Value:F3}");
+            if (minKeptSim.HasValue)
+                Console.WriteLine($"   📈 Мин. similarity среди отобранных: {minKeptSim.Value:F3}");
+            Console.WriteLine();
+        }
+
+        if (filteredResults.Count == 0)
+        {
+            Console.WriteLine("⚠️  После фильтрации чанки не найдены.");
+            return true;
+        }
+
+        // Формируем контекст из отфильтрованных чанков
+        var ragContext = BuildRagContext(filteredResults);
 
         // Показываем, какие чанки нашлись (диагностика)
         Console.WriteLine("📦 Найденные чанки (схожесть, документ, текст):");
@@ -73,7 +99,7 @@ public class RagCommand : CommandHandler
         Console.WriteLine(new string('-', 80));
         Console.WriteLine();
 
-        Console.WriteLine("📋 Шаг 2/4: Ответ БЕЗ RAG (вопрос → LLM)...");
+        Console.WriteLine("📋 Шаг 3/4: Ответ БЕЗ RAG (вопрос → LLM)...");
         var answerWithoutRag = await CallLlmAsync(
             ctx.Config,
             question,
@@ -81,7 +107,7 @@ public class RagCommand : CommandHandler
             question,
             temperature: 0.3);
 
-        Console.WriteLine("📚 Шаг 3/4: Ответ С RAG (вопрос + чанки → LLM)...");
+        Console.WriteLine("📚 Шаг 4/4: Ответ С RAG (вопрос + чанки → LLM)...");
         var ragPrompt = $"""
             === РОЛЬ ===
             Ты — аналитик, который отвечает на вопросы на основе предоставленных документов.
@@ -113,7 +139,7 @@ public class RagCommand : CommandHandler
             maxTokens: 4096);
 
         // Вывод результатов
-        PrintRagComparison(question, searchResults, answerWithoutRag, answerWithRag);
+        PrintRagComparison(question, searchResults, filteredResults, rejectedResults, answerWithoutRag, answerWithRag);
 
         return true;
     }
@@ -197,16 +223,64 @@ public class RagCommand : CommandHandler
 
         Console.WriteLine($"  Всего чанков в индексах: {totalChunks}, найдено релевантных: {allChunks.Count}");
 
-        // Сортируем по score (по убыванию) и берём топ-K
+        // Сортируем по score (по убыванию)
         allChunks.Sort((a, b) => a.Distance.CompareTo(b.Distance));
 
         var seenTexts = new HashSet<string>();
         var deduped = allChunks
             .Where(r => seenTexts.Add(r.Chunk.Text))
-            .Take(ctx.DocIndexConfig.SearchTopK * 5)
             .ToList();
 
         return deduped;
+    }
+
+    /// <summary>
+    /// Этап 2: reranker / фильтр релевантности.
+    /// Принимает все результаты поиска, фильтрует по порогу и берёт топ-K.
+    /// Возвращает (отфильтрованные, отброшенные, статистику).
+    /// </summary>
+    private static (
+        List<(DocumentChunk Chunk, float Distance, string Strategy, string SafeName)> Kept,
+        List<(DocumentChunk Chunk, float Distance, string Strategy, string SafeName)> Rejected,
+        int TotalBefore,
+        int TotalAfter,
+        float? MinKeptSimilarity,
+        float? MaxRejectedSimilarity)
+    RerankAndFilter(
+        List<(DocumentChunk Chunk, float Distance, string Strategy, string SafeName)> allResults,
+        float minSimilarityThreshold,
+        int topK)
+    {
+        var rejected = new List<(DocumentChunk Chunk, float Distance, string Strategy, string SafeName)>();
+        var kept = new List<(DocumentChunk Chunk, float Distance, string Strategy, string SafeName)>();
+
+        foreach (var result in allResults)
+        {
+            var similarity = 1.0f - result.Distance;
+            if (similarity < minSimilarityThreshold)
+            {
+                rejected.Add(result);
+            }
+            else
+            {
+                kept.Add(result);
+            }
+        }
+
+        // Берём топ-K из отфильтрованных (уже отсортированы по distance / asc)
+        var finalResults = kept.Take(topK).ToList();
+
+        // Если после фильтрации ничего не осталось — fallback на top-K из исходных
+        if (finalResults.Count == 0 && allResults.Count > 0)
+        {
+            Console.WriteLine("   ⚠️  Все чанки отфильтрованы — используем top-K из исходных результатов");
+            finalResults = allResults.Take(topK).ToList();
+        }
+
+        var minKeptSim = finalResults.Count > 0 ? (float?)(1.0f - finalResults.Max(r => r.Distance)) : null;
+        var maxRejectSim = rejected.Count > 0 ? (float?)(1.0f - rejected.Min(r => r.Distance)) : null;
+
+        return (finalResults, rejected, allResults.Count, finalResults.Count, minKeptSim, maxRejectSim);
     }
 
     private static float ComputeRelevanceScore(string text, string title, string query, List<string> keywords, List<string> phrases)
@@ -423,7 +497,9 @@ public class RagCommand : CommandHandler
 
     private static void PrintRagComparison(
         string question,
-        List<(DocumentChunk Chunk, float Distance, string Strategy, string SafeName)> searchResults,
+        List<(DocumentChunk Chunk, float Distance, string Strategy, string SafeName)> allResults,
+        List<(DocumentChunk Chunk, float Distance, string Strategy, string SafeName)> filteredResults,
+        List<(DocumentChunk Chunk, float Distance, string Strategy, string SafeName)> rejectedResults,
         string answerWithoutRag,
         string answerWithRag)
     {
@@ -433,24 +509,62 @@ public class RagCommand : CommandHandler
         Console.WriteLine(new string('=', 80));
         Console.WriteLine();
 
-        // Поиск — релевантные чанки
-        Console.WriteLine("🔎 РЕЗУЛЬТАТЫ ПОИСКА:");
+        // Поиск — сравнение до и после фильтрации
+        Console.WriteLine("🔎 РЕЗУЛЬТАТЫ ПОИСКА (до / после фильтрации):");
         Console.WriteLine(new string('-', 60));
 
-        var grouped = searchResults
+        Console.WriteLine($"\n  📊 Всего найдено: {allResults.Count} чанков");
+        Console.WriteLine($"  ✅ После фильтра: {filteredResults.Count} чанков");
+        Console.WriteLine($"  ❌ Отброшено: {rejectedResults.Count} чанков");
+
+        if (filteredResults.Count > 0)
+        {
+            var minSim = 1.0f - filteredResults.Max(r => r.Distance);
+            var maxSim = 1.0f - filteredResults.Min(r => r.Distance);
+            var avgSim = filteredResults.Average(r => 1.0f - r.Distance);
+            Console.WriteLine($"  📈 Similarity: min={minSim:F3}, max={maxSim:F3}, avg={avgSim:F3}");
+        }
+
+        if (rejectedResults.Count > 0)
+        {
+            var maxRejectSim = 1.0f - rejectedResults.Min(r => r.Distance);
+            var minRejectSim = 1.0f - rejectedResults.Max(r => r.Distance);
+            var avgRejectSim = rejectedResults.Average(r => 1.0f - r.Distance);
+            Console.WriteLine($"  📉 Отброшенные: min={minRejectSim:F3}, max={maxRejectSim:F3}, avg={avgRejectSim:F3}");
+        }
+
+        Console.WriteLine($"\n  📋 Отобранные чанки (топ-{filteredResults.Count}):");
+
+        var grouped = filteredResults
             .GroupBy(r => r.SafeName)
             .OrderBy(g => g.Key)
             .ToList();
 
         foreach (var group in grouped)
         {
-            Console.WriteLine($"\n  📁 {group.Key}");
+            Console.WriteLine($"\n    📁 {group.Key}");
 
             foreach (var (chunk, distance, strategy, _) in group)
             {
                 var similarity = 1.0f - distance;
                 var preview = chunk.Text.Length > 200 ? chunk.Text[..200] + "..." : chunk.Text;
-                Console.WriteLine($"    [{strategy,-12}] {similarity:F3} | {preview}");
+                Console.WriteLine($"      [{strategy,-12}] {similarity:F3} | {preview}");
+            }
+        }
+
+        if (rejectedResults.Count > 0)
+        {
+            Console.WriteLine($"\n  🗑️  Примеры отброшенных чанков (top-5 по similarity):");
+            var topRejected = rejectedResults
+                .OrderBy(r => r.Distance)
+                .Take(5)
+                .ToList();
+
+            foreach (var (chunk, distance, strategy, safeName) in topRejected)
+            {
+                var similarity = 1.0f - distance;
+                var preview = chunk.Text.Length > 150 ? chunk.Text[..150] + "..." : chunk.Text;
+                Console.WriteLine($"      [{strategy,-12}] {similarity:F3} [{safeName}] {preview}");
             }
         }
 
