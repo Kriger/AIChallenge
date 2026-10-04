@@ -110,4 +110,14 @@ public class DocumentIndexingConfig
     /// Включить показ статистики фильтрации в выводе.
     /// </summary>
     public bool RagShowFilterStats { get; set; } = true;
+
+    // ==================== RAG Answer Threshold ====================
+
+    /// <summary>
+    /// Порог релевантности для формирования ответа.
+    /// Если максимальная similarity среди отобранных чанков ниже этого значения,
+    /// ассистент обязан сказать «не знаю» и попросить уточнить запрос.
+    /// Диапазон: 0.0 — 1.0. По умолчанию 0.30.
+    /// </summary>
+    public float RagAnswerThreshold { get; set; } = 0.30f;
 }

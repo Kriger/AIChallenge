@@ -82,6 +82,18 @@ public class RagCommand : CommandHandler
             return true;
         }
 
+        // ===== Проверка порога релевантности для формирования ответа =====
+        var maxSimilarity = filteredResults.Max(r => 1.0f - r.Distance);
+        var answerThreshold = ctx.DocIndexConfig.RagAnswerThreshold;
+
+        if (maxSimilarity < answerThreshold)
+        {
+            Console.WriteLine($"⚠️  Максимальная релевантность чанков ({maxSimilarity:F3}) ниже порога ({answerThreshold:F2}).");
+            Console.WriteLine("   Ассистент не может ответить на основе предоставленных документов.");
+            Console.WriteLine("   Пожалуйста, уточните ваш запрос или попробуйте другие ключевые слова.");
+            return true;
+        }
+
         // Формируем контекст из отфильтрованных чанков
         var ragContext = BuildRagContext(filteredResults);
 
@@ -110,15 +122,40 @@ public class RagCommand : CommandHandler
         Console.WriteLine("📚 Шаг 4/4: Ответ С RAG (вопрос + чанки → LLM)...");
         var ragPrompt = $"""
             === РОЛЬ ===
-            Ты — аналитик, который отвечает на вопросы на основе предоставленных документов.
+            Ты -- аналитик, который отвечает на вопросы на основе предоставленных документов.
 
             === ИНСТРУКЦИИ ===
-            1. Прочитай все документы ниже внимательно.
+            1. Внимательно прочитай все документы (чанки) ниже.
             2. Найди информацию, которая отвечает на вопрос пользователя.
             3. Ответь на вопрос, используя информацию из документов.
-            4. Если ответ есть в документах — приведи его подробно.
-            5. Если ответ есть частично — скажи, что именно найдено.
-            6. Если документы НЕ содержат ответа — напиши: "В предоставленных документах нет информации об этом."
+            4. Если ответ есть в документах -- приведи его подробно.
+            5. Если ответ есть частично -- укажи, что именно найдено.
+            6. Если документы НЕ содержат достаточной информации -- напиши:
+               "В предоставленных документах нет достаточной информации для ответа на этот вопрос. Пожалуйста, уточните запрос."
+
+            === ФОРМАТ ОТВЕТА ===
+            Ты ОБЯЗАН вернуть ответ в следующем формате, используя указанные разделители:
+
+            --- ОТВЕТ ---
+            [Здесь твой подробный ответ на вопрос пользователя, основанный на документах]
+
+            --- ИСТОЧНИКИ ---
+            [Здесь список источников, из которых взята информация. Формат для каждого источника:
+            - source: <полный путь к файлу или название>
+              section: <название раздела>
+              chunk_id: <идентификатор чанка>
+            ]
+
+            --- ЦИТАТЫ ---
+            [Здесь фрагменты текста из найденных чанков, которые подтверждают ответ. Формат для каждой цитаты:
+            - "[текст цитаты]" -- source: <название>, section: <раздел>, chunk_id: <идентификатор>
+            ]
+
+            === ВАЖНО ===
+            - Ты ОБЯЗАН включить все три раздела: ОТВЕТ, ИСТОЧНИКИ, ЦИТАТЫ
+            - В разделе ИСТОЧНИКИ укажи source + section + chunk_id для каждого чанка
+            - В разделе ЦИТАТЫ приведи точные фрагменты текста из чанков
+            - Если информации недостаточно, в разделе ОТВЕТ напиши "не знаю" и попроси уточнить
 
             === ДОКУМЕНТЫ ===
             {ragContext}
@@ -127,19 +164,25 @@ public class RagCommand : CommandHandler
             === ВОПРОС ===
             {question}
 
-            === ОТВЕТ ===
+            === ТВОЙ ОТВЕТ ===
             """;
+
+        var ragSystemPrompt = "Ты -- аналитик, отвечающий на вопросы на основе документов. Ты обязан возвращать ответ в структурированном формате с источниками и цитатами.";
+        var ragUserPrompt = $"=== ДОКУМЕНТЫ ===\n{ragContext}\n=== КОНЕЦ ДОКУМЕНТОВ ===\n\n=== ВОПРОС ===\n{question}\n\n=== ФОРМАТ ОТВЕТА ===\nТы ОБЯЗАН вернуть ответ в следующем формате, используя указанные разделители:\n\n--- ОТВЕТ ---\n[Подробный ответ на вопрос, основанный на документах]\n\n--- ИСТОЧНИКИ ---\n[Список источников в формате:\n- source: <путь/название>\n  section: <раздел>\n  chunk_id: <идентификатор чанка>]\n\n--- ЦИТАТЫ ---\n[Фрагменты текста из чанков в формате:\n- \"текст цитаты\" -- source: <название>, section: <раздел>, chunk_id: <идентификатор>]\n\nЕсли информации недостаточно, напиши в разделе ОТВЕТ: \"не знаю\" и попроси уточнить запрос.\n\n=== ТВОЙ ОТВЕТ ===";
 
         var answerWithRag = await CallLlmAsync(
             ctx.Config,
-            ragPrompt,
-            "Ты — аналитик, отвечающий на вопросы на основе документов.",
+            ragSystemPrompt,
+            ragUserPrompt,
             question,
             temperature: 0.1,
             maxTokens: 4096);
 
+        // Парсим структурированный ответ RAG
+        var (ragAnswer, ragSources, ragQuotes) = ParseRagResponse(answerWithRag);
+
         // Вывод результатов
-        PrintRagComparison(question, searchResults, filteredResults, rejectedResults, answerWithoutRag, answerWithRag);
+        PrintRagComparison(question, searchResults, filteredResults, rejectedResults, answerWithoutRag, ragAnswer, ragSources, ragQuotes);
 
         return true;
     }
@@ -495,13 +538,78 @@ public class RagCommand : CommandHandler
         return answer;
     }
 
+    /// <summary>
+    /// Парсит структурированный ответ LLM на три раздела: ответ, источники, цитаты.
+    /// </summary>
+    private static (string Answer, List<string> Sources, List<string> Quotes) ParseRagResponse(string rawResponse)
+    {
+        var answer = rawResponse.Trim();
+        var sources = new List<string>();
+        var quotes = new List<string>();
+
+        // Извлекаем раздел ОТВЕТ
+        var answerIdx = rawResponse.IndexOf("--- ОТВЕТ ---", StringComparison.Ordinal);
+        if (answerIdx >= 0)
+        {
+            var rest = rawResponse[(answerIdx + "--- ОТВЕТ ---".Length)..];
+            var sourcesIdx = rest.IndexOf("--- ИСТОЧНИКИ ---", StringComparison.Ordinal);
+            var quotesIdx = rest.IndexOf("--- ЦИТАТЫ ---", StringComparison.Ordinal);
+
+            var answerEnd = int.MaxValue;
+            if (sourcesIdx >= 0 && sourcesIdx < answerEnd) answerEnd = sourcesIdx;
+            if (quotesIdx >= 0 && quotesIdx < answerEnd) answerEnd = quotesIdx;
+
+            if (answerEnd < int.MaxValue)
+                answer = rest[..answerEnd].Trim();
+            else
+                answer = rest.Trim();
+
+            // Извлекаем раздел ИСТОЧНИКИ
+            if (sourcesIdx >= 0)
+            {
+                var sourcesRest = rawResponse[(sourcesIdx + "--- ИСТОЧНИКИ ---".Length)..];
+                var quotesIdxInRest = sourcesRest.IndexOf("--- ЦИТАТЫ ---", StringComparison.Ordinal);
+
+                string sourcesText;
+                if (quotesIdxInRest >= 0)
+                    sourcesText = sourcesRest[..quotesIdxInRest].Trim();
+                else
+                    sourcesText = sourcesRest.Trim();
+
+                foreach (var line in sourcesText.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    var trimmed = line.Trim();
+                    if (!string.IsNullOrEmpty(trimmed))
+                        sources.Add(trimmed);
+                }
+            }
+
+            // Извлекаем раздел ЦИТАТЫ
+            if (quotesIdx >= 0)
+            {
+                var quotesText = rawResponse[(quotesIdx + "--- ЦИТАТЫ ---".Length)..].Trim();
+
+                foreach (var line in quotesText.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    var trimmed = line.Trim();
+                    if (!string.IsNullOrEmpty(trimmed))
+                        quotes.Add(trimmed);
+                }
+            }
+        }
+
+        return (answer, sources, quotes);
+    }
+
     private static void PrintRagComparison(
         string question,
         List<(DocumentChunk Chunk, float Distance, string Strategy, string SafeName)> allResults,
         List<(DocumentChunk Chunk, float Distance, string Strategy, string SafeName)> filteredResults,
         List<(DocumentChunk Chunk, float Distance, string Strategy, string SafeName)> rejectedResults,
         string answerWithoutRag,
-        string answerWithRag)
+        string ragAnswer,
+        List<string> ragSources,
+        List<string> ragQuotes)
     {
         Console.WriteLine();
         Console.WriteLine(new string('=', 80));
@@ -568,21 +676,48 @@ public class RagCommand : CommandHandler
             }
         }
 
+        // ===== Ответ БЕЗ RAG =====
         Console.WriteLine();
         Console.WriteLine(new string('=', 80));
         Console.WriteLine("🤖 ОТВЕТ БЕЗ RAG (только вопрос → LLM):");
         Console.WriteLine(new string('-', 80));
         Console.WriteLine(answerWithoutRag);
         Console.WriteLine(new string('=', 80));
+
+        // ===== Ответ С RAG (структурированный) =====
         Console.WriteLine();
-        Console.WriteLine("📚 ОТВЕТ С RAG (вопрос + релевантные чанки → LLM):");
+        Console.WriteLine(new string('=', 80));
+        Console.WriteLine("📚 ОТВЕТ С RAG (структурированный):");
         Console.WriteLine(new string('-', 80));
-        Console.WriteLine(answerWithRag);
+
+        Console.WriteLine("\n✅ Ответ:");
+        Console.WriteLine(ragAnswer);
+
+        if (ragSources.Count > 0)
+        {
+            Console.WriteLine();
+            Console.WriteLine("📑 Источники:");
+            foreach (var source in ragSources)
+            {
+                Console.WriteLine($"  {source}");
+            }
+        }
+
+        if (ragQuotes.Count > 0)
+        {
+            Console.WriteLine();
+            Console.WriteLine("📖 Цитаты из документов:");
+            foreach (var quote in ragQuotes)
+            {
+                Console.WriteLine($"  {quote}");
+            }
+        }
+
         Console.WriteLine(new string('=', 80));
 
         // Краткое сравнение
         Console.WriteLine();
-        PrintComparisonSummary(answerWithoutRag, answerWithRag);
+        PrintComparisonSummary(answerWithoutRag, ragAnswer);
     }
 
     private static void PrintComparisonSummary(string answerWithoutRag, string answerWithRag)
