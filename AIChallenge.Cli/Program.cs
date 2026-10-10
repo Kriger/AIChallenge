@@ -28,6 +28,10 @@ configuration.GetSection("GigaChat").Bind(config);
 var docIndexConfig = new DocumentIndexingConfig();
 configuration.GetSection("DocumentIndexing").Bind(docIndexConfig);
 
+// Load LocalLlmConfig
+var localLlmConfig = new LocalLlmConfig();
+configuration.GetSection("LocalLlm").Bind(localLlmConfig);
+
 // Load ContextConfig manually (Binder not available in Models project)
 var ctxOptions = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
 var ctxSection = configuration.GetSection("Context");
@@ -49,6 +53,30 @@ if (string.IsNullOrEmpty(config.ClientId))
     Console.WriteLine("   3. Внесите их в appsettings.json");
     Console.ResetColor();
     return;
+}
+
+// Проверка локальной LLM
+if (localLlmConfig.Enabled)
+{
+    var localLlmClient = new LocalLlmClient(localLlmConfig);
+    var available = await localLlmClient.IsAvailableAsync();
+    if (available)
+    {
+        var models = await localLlmClient.ListModelsAsync();
+        Console.WriteLine($"🏠 Локальная LLM (Ollama): подключена, модель={localLlmConfig.Model}");
+        if (models.Any())
+        {
+            Console.WriteLine($"   Доступные модели: {string.Join(", ", models)}");
+        }
+    }
+    else
+    {
+        Console.WriteLine($"⚠️  Локальная LLM включена, но Ollama недоступен по {localLlmConfig.Url}");
+        Console.WriteLine("   Запустите: ollama serve");
+        Console.WriteLine("   Переключитесь на GigaChat: установите \"LocalLlm:Enabled\" = false");
+    }
+    localLlmClient.Dispose();
+    Console.WriteLine();
 }
 
 Console.WriteLine("✅ Конфигурация загружена");
@@ -128,6 +156,10 @@ agent.Adaptive = adaptive;
 agent.Planner = planner;
 agent.Config = config;
 
+// Инициализация локальной LLM из конфига
+agent.UpdateLocalLlmConfig(localLlmConfig);
+agent.LocalLlmEnabled = localLlmConfig.Enabled;
+
 // Загрузка профиля агента — всегда из profiles/agent_profile.json
 agent.AgentProfile = AgentProfileManager.Load("default");
 Console.WriteLine($"🤖 Профиль агента загружен: {agent.AgentProfile.Name} (стиль: {agent.AgentProfile.Style}, формат: {agent.AgentProfile.Format}, глубина: {agent.AgentProfile.Depth})");
@@ -184,7 +216,7 @@ Console.WriteLine("   /fsm load, /fsm history, /fsm dialog, /fsm help");
 Console.WriteLine();
 
 // Регистируем команды
-var ctx = new CommandContext(agent, config, docIndexConfig, taskStateMachine, logger, cache, memoryManager);
+var ctx = new CommandContext(agent, config, localLlmConfig, docIndexConfig, taskStateMachine, logger, cache, memoryManager);
 
 // Автоматическая регистрация всех CommandHandler из сборки
 var assembly = typeof(CommandHandler).Assembly;

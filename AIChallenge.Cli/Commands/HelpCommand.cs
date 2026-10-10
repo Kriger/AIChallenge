@@ -22,6 +22,15 @@ public sealed class HelpCommand : CommandHandler
         PrintCmd("metrics", "статистика");
         Console.WriteLine();
 
+        PrintYellow("── Локальная LLM (Ollama) ──");
+        PrintCmd("local status", "статус локальной LLM");
+        PrintCmd("local on/off", "включить/выключить");
+        PrintCmd("local toggle", "переключить");
+        PrintCmd("local model", "выбрать модель");
+        PrintCmd("local check", "проверить подключение");
+        PrintCmd("local models", "список моделей");
+        Console.WriteLine();
+
         PrintYellow("── Поведение ──");
         PrintCmd("adaptive", "адаптация (статус/on/off/reset/threshold)");
         PrintCmd("planner", "статус планировщика");

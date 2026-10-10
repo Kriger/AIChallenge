@@ -147,7 +147,13 @@ public static class FsmHandler
             : $"{result.Duration.TotalSeconds:F1} с";
 
         Console.WriteLine();
-        PrintGreen("🤖 GigaChat:");
+        var provider = result.Source switch
+        {
+            Source.LocalLlm => "🏠 Локальная LLM",
+            Source.Cache => "💾 Кэш",
+            _ => "🤖 GigaChat",
+        };
+        PrintGreen($"{provider}:");
         Console.WriteLine($"   {result.Answer}");
         Console.WriteLine();
 

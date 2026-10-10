@@ -42,3 +42,6 @@ AIChallenge.Cli/fsm_state.json
 ## MCP Pipeline intermediate files
 AIChallenge.McpPipeline/mcp_pipeline/
 AIChallenge.DocumentIndexing/Documents/
+test-scenarios.md
+test-docs/architecture/
+test-docs/ml/

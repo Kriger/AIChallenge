@@ -7,4 +7,5 @@ public enum Source
 {
     Api,
     Cache,
+    LocalLlm,
 }

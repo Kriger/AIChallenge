@@ -5,6 +5,7 @@ using AIChallenge.DocumentIndexing.Embeddings;
 using AIChallenge.DocumentIndexing.Models;
 using AIChallenge.McpScheduler;
 using AIChallenge.Models;
+using AIChallenge.Core;
 using System.Text;
 using System.Text.Json;
 
@@ -196,6 +197,7 @@ public class ChatCommand : CommandHandler
         // 4. Запрос к LLM с учётом RAG-контекста, истории и памяти задачи
         Console.WriteLine("  💭 Формирую ответ...");
         var answer = await CallLlmWithRagAsync(
+            ctx,
             ctx.Config,
             question,
             ragContext,
@@ -356,6 +358,7 @@ public class ChatCommand : CommandHandler
     }
 
     private async Task<string> CallLlmWithRagAsync(
+        CommandContext ctx,
         GigaChatConfig config,
         string question,
         string ragContext,
@@ -363,8 +366,6 @@ public class ChatCommand : CommandHandler
         string taskMemory,
         List<(DocumentChunk Chunk, float Distance, string Strategy)> searchResults)
     {
-        var client = new GigaChatClient(config.ClientId, config.ClientSecret);
-
         var systemPrompt = $"""
             Ты — полезный ассистент, отвечающий на вопросы на основе предоставленных документов.
 
@@ -392,6 +393,29 @@ public class ChatCommand : CommandHandler
             === ТВОЙ ОТВЕТ ===
             """;
 
+        // Если включена локальная LLM — используем её
+        if (ctx?.LocalLlmConfig.Enabled == true)
+        {
+            Console.WriteLine("  🏠 Отправляю запрос в локальную LLM (Ollama)...");
+            try
+            {
+                using var localClient = new LocalLlmClient(ctx.LocalLlmConfig);
+                var (localAnswer, _) = await localClient.ChatAsync(
+                    systemPrompt: systemPrompt,
+                    userPrompt: userPrompt,
+                    temperature: 0.3,
+                    maxTokens: 4096);
+                return localAnswer;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"  ⚠️  Ошибка локальной LLM: {ex.Message}");
+                Console.WriteLine("  🔄 Переключаюсь на GigaChat API...");
+            }
+        }
+
+        // Fallback — GigaChat
+        var client = new GigaChatClient(config.ClientId, config.ClientSecret);
         var answer = await client.ChatAsync(
             model: config.Model,
             systemPrompt: systemPrompt,

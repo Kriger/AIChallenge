@@ -8,7 +8,7 @@ using System.Text.Json;
 namespace AIChallenge.Core;
 
 /// <summary>
-/// Агент для общения с LLM через GigaChat API.
+/// Агент для общения с LLM через GigaChat API или локальную LLM (Ollama).
 ///
 /// Настоящий агент — самостоятельная сущность с собственной логикой:
 /// - Кэширует ответы на похожие запросы (fuzzy-поиск)
@@ -51,6 +51,37 @@ public class ChatAgent
     private readonly ChatClient _httpClient;
     private readonly AuthClient _authClient;
     private readonly GigaChatConfig _config;
+    private LocalLlmClient? _localLlmClient;
+
+    /// <summary>
+    /// Клиент локальной LLM (Ollama). null если не используется.
+    /// </summary>
+    public LocalLlmClient? LocalLlmClient => _localLlmClient;
+
+    /// <summary>
+    /// Включена ли локальная LLM. true = запросы идут в Ollama, false = в GigaChat API.
+    /// </summary>
+    public bool LocalLlmEnabled { get; set; } = false;
+
+    /// <summary>
+    /// Модель для локальной LLM.
+    /// </summary>
+    public string LocalLlmModel { get; set; } = "llama3.1";
+
+    /// <summary>
+    /// URL Ollama API.
+    /// </summary>
+    public string LocalLlmUrl { get; set; } = "http://localhost:11434";
+
+    /// <summary>
+    /// Температура для локальной LLM.
+    /// </summary>
+    public double LocalLlmTemperature { get; set; } = 0.7;
+
+    /// <summary>
+    /// MaxTokens для локальной LLM.
+    /// </summary>
+    public int LocalLlmMaxTokens { get; set; } = 0;
 
     private readonly List<ApiMessage> _history = new();
 
@@ -131,6 +162,39 @@ public class ChatAgent
         Planner = _planner;
         ContextManager = contextManager ?? new ContextManager(httpClient, authClient, Logger);
         _config = new GigaChatConfig();
+    }
+
+    /// <summary>
+    /// Получает или создаёт клиент локальной LLM.
+    /// </summary>
+    private LocalLlmClient GetLocalLlmClient()
+    {
+        if (_localLlmClient is null)
+        {
+            _localLlmClient = new LocalLlmClient(new LocalLlmConfig
+            {
+                Enabled = true,
+                Url = LocalLlmUrl,
+                Model = LocalLlmModel,
+                Temperature = LocalLlmTemperature,
+                MaxTokens = LocalLlmMaxTokens,
+                TimeoutSeconds = 120,
+            });
+        }
+        return _localLlmClient;
+    }
+
+    /// <summary>
+    /// Обновляет параметры локальной LLM.
+    /// </summary>
+    public void UpdateLocalLlmConfig(LocalLlmConfig config)
+    {
+        LocalLlmUrl = config.Url;
+        LocalLlmModel = config.Model;
+        LocalLlmTemperature = config.Temperature;
+        LocalLlmMaxTokens = config.MaxTokens;
+        _localLlmClient?.Dispose();
+        _localLlmClient = null;
     }
 
     /// <summary>
@@ -440,6 +504,46 @@ public class ChatAgent
         {
             try
             {
+                // === Локальная LLM (Ollama) ===
+                if (LocalLlmEnabled)
+                {
+                    Logger.Info($"[LocalLlm] Отправляю запрос в {LocalLlmModel}...");
+                    
+                    var localClient = GetLocalLlmClient();
+                    var localStopwatch = System.Diagnostics.Stopwatch.StartNew();
+                    
+                    var (localAnswer, localUsage) = await localClient.ChatAsync(
+                        systemPrompt: extendedSystemMessage,
+                        userPrompt: userMessage,
+                        temperature: Temperature ?? LocalLlmTemperature,
+                        maxTokens: MaxTokens > 0 ? MaxTokens : (int?)null);
+                    
+                    localStopwatch.Stop();
+                    
+                    var localAssistantMsg = new ApiMessage { Role = "assistant", Content = localAnswer };
+                    _history.Add(localAssistantMsg);
+                    MemoryManager.ShortTerm.Add("assistant", localAnswer);
+                    ContextManager.AddMessage(localAssistantMsg);
+                    
+                    var localToolCalls = McpToolRegistry.ParseToolCalls(localAnswer);
+                    if (localToolCalls.Count > 0 && McpRegistry is not null && McpRegistry.Tools.Count > 0)
+                    {
+                        Logger.Info($"[LocalLlm] Найдено {localToolCalls.Count} tool-вызовов, но локальная LLM не поддерживает function calling");
+                    }
+                    
+                    Metrics.SuccessfulRequests++;
+                    Metrics.TotalDuration += localStopwatch.Elapsed;
+                    
+                    return new AgentResult
+                    {
+                        Answer = localAnswer,
+                        Source = Source.LocalLlm,
+                        Duration = localStopwatch.Elapsed,
+                        Usage = localUsage,
+                    };
+                }
+                
+                // === GigaChat API ===
                 var token = await _authClient.GetAccessTokenAsync();
 
                 // Подготавливаем инструменты для function calling
