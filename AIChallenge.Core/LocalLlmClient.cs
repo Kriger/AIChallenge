@@ -98,16 +98,32 @@ public sealed class LocalLlmClient : IDisposable
             ["content"] = userPrompt,
         });
 
+        var options = new Dictionary<string, object>
+        {
+            ["temperature"] = temperature ?? _config.Temperature,
+            ["num_predict"] = ResolveMaxTokens(maxTokens),
+        };
+
+        // Расширенные параметры Ollama (если заданы)
+        if (_config.TopK > 0)
+            options["top_k"] = _config.TopK;
+        if (_config.TopP > 0)
+            options["top_p"] = _config.TopP;
+        if (_config.RepeatPenalty != 0)
+            options["repeat_penalty"] = _config.RepeatPenalty;
+        if (_config.NumCtx > 0)
+            options["num_ctx"] = _config.NumCtx;
+        if (_config.NumBatch > 0)
+            options["num_batch"] = _config.NumBatch;
+        if (_config.NumThread > 0)
+            options["num_thread"] = _config.NumThread;
+
         var requestBody = new Dictionary<string, object>
         {
             ["model"] = _config.Model,
             ["messages"] = messages,
             ["stream"] = false,
-            ["options"] = new Dictionary<string, object>
-            {
-                ["temperature"] = temperature ?? _config.Temperature,
-                ["num_predict"] = ResolveMaxTokens(maxTokens),
-            },
+            ["options"] = options,
         };
 
         var jsonOptions = new JsonSerializerOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
@@ -162,16 +178,32 @@ public sealed class LocalLlmClient : IDisposable
             })
             .ToList();
 
+        var options = new Dictionary<string, object>
+        {
+            ["temperature"] = temperature ?? _config.Temperature,
+            ["num_predict"] = ResolveMaxTokens(maxTokens),
+        };
+
+        // Расширенные параметры Ollama (если заданы)
+        if (_config.TopK > 0)
+            options["top_k"] = _config.TopK;
+        if (_config.TopP > 0)
+            options["top_p"] = _config.TopP;
+        if (_config.RepeatPenalty != 0)
+            options["repeat_penalty"] = _config.RepeatPenalty;
+        if (_config.NumCtx > 0)
+            options["num_ctx"] = _config.NumCtx;
+        if (_config.NumBatch > 0)
+            options["num_batch"] = _config.NumBatch;
+        if (_config.NumThread > 0)
+            options["num_thread"] = _config.NumThread;
+
         var requestBody = new Dictionary<string, object>
         {
             ["model"] = _config.Model,
             ["messages"] = messages,
             ["stream"] = false,
-            ["options"] = new Dictionary<string, object>
-            {
-                ["temperature"] = temperature ?? _config.Temperature,
-                ["num_predict"] = ResolveMaxTokens(maxTokens),
-            },
+            ["options"] = options,
         };
 
         var jsonOptions = new JsonSerializerOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };

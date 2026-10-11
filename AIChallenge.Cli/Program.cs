@@ -32,6 +32,9 @@ configuration.GetSection("DocumentIndexing").Bind(docIndexConfig);
 var localLlmConfig = new LocalLlmConfig();
 configuration.GetSection("LocalLlm").Bind(localLlmConfig);
 
+// Apply optimization profile defaults (overwrites only unset values)
+localLlmConfig.ApplyProfileDefaults();
+
 // Load ContextConfig manually (Binder not available in Models project)
 var ctxOptions = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
 var ctxSection = configuration.GetSection("Context");

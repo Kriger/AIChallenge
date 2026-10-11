@@ -29,6 +29,10 @@ public sealed class HelpCommand : CommandHandler
         PrintCmd("local model", "выбрать модель");
         PrintCmd("local check", "проверить подключение");
         PrintCmd("local models", "список моделей");
+        PrintCmd("local profile [имя]", "профиль оптимизации");
+        PrintCmd("local profiles", "показать все профили");
+        PrintCmd("local temp <0-2>", "температура");
+        PrintCmd("local maxtokens <число>", "макс. токенов");
         Console.WriteLine();
 
         PrintYellow("── Поведение ──");
