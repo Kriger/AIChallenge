@@ -30,6 +30,24 @@ public class ChatCommand : CommandHandler
         Console.WriteLine("║  🗨️  RAG-ЧАТ — диалог с поиском по документами          ║");
         Console.WriteLine("╚══════════════════════════════════════════════════════════╝");
         Console.WriteLine();
+
+        // Проверка доступности Ollama для RAG
+        var ollamaAvailable = await CheckOllamaAvailabilityAsync(ctx);
+        if (!ollamaAvailable)
+        {
+            Console.WriteLine("  ⚠️  Ollama недоступен! RAG-поиск не будет работать.");
+            Console.WriteLine("     Запустите: ollama serve");
+            Console.WriteLine("     Убедитесь, что модель эмбеддингов загружена: ollama pull mxbai-embed-large");
+            Console.WriteLine();
+            Console.WriteLine("  RAG-чат будет работать без поиска по документам.");
+            Console.WriteLine();
+        }
+        else
+        {
+            Console.WriteLine("  ✅ Ollama доступен для RAG-поиска");
+            Console.WriteLine();
+        }
+
         Console.WriteLine("  Команды:");
         Console.WriteLine("    <текст>              — задать вопрос");
         Console.WriteLine("    /status              — показать состояние задачи");
@@ -43,8 +61,26 @@ public class ChatCommand : CommandHandler
         Console.WriteLine(new string('─', 60));
         Console.WriteLine();
 
+        // Если вопрос передан сразу: /chat <вопрос>
+        string? initialQuestion = null;
+        if (parts.Length > 1)
+        {
+            initialQuestion = string.Join(" ", parts.Skip(1));
+        }
+
         while (true)
         {
+            // Используем начальный вопрос, если есть
+            if (initialQuestion is not null)
+            {
+                var question = initialQuestion;
+                initialQuestion = null;
+                await ProcessQuestionAsync(question, ctx);
+                Console.WriteLine(new string('─', 60));
+                Console.WriteLine();
+                continue;
+            }
+
             Console.Write("  Вы: ");
             var input = Console.ReadLine()?.Trim();
 
@@ -216,8 +252,11 @@ public class ChatCommand : CommandHandler
 
         // 6. Вывод ответа
         Console.WriteLine();
-        Console.WriteLine("  ╔══════════════════════════════════════════════════════════╗");
-        Console.WriteLine("  ║  🤖 Ответ:");
+        
+        // Показываем источник ответа
+        var provider = ctx.LocalLlmConfig.Enabled ? "🏠 Локальная LLM" : "🤖 GigaChat";
+        Console.WriteLine($"  ╔══════════════════════════════════════════════════════════╗");
+        Console.WriteLine($"  ║  {provider}:");
         Console.WriteLine("  ╚══════════════════════════════════════════════════════════╝");
         Console.WriteLine();
         Console.WriteLine($"  {answer}");
@@ -230,6 +269,20 @@ public class ChatCommand : CommandHandler
         Console.WriteLine();
         Console.WriteLine(new string('─', 60));
         Console.WriteLine();
+    }
+
+    private async Task<bool> CheckOllamaAvailabilityAsync(CommandContext ctx)
+    {
+        try
+        {
+            var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+            var response = await client.GetAsync($"{ctx.DocIndexConfig.OllamaUrl}/api/tags");
+            return response.IsSuccessStatusCode;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private async Task<List<(DocumentChunk Chunk, float Distance, string Strategy)>> SearchDocumentsAsync(
@@ -400,11 +453,16 @@ public class ChatCommand : CommandHandler
             try
             {
                 using var localClient = new LocalLlmClient(ctx.LocalLlmConfig);
-                var (localAnswer, _) = await localClient.ChatAsync(
+                var (localAnswer, usage) = await localClient.ChatAsync(
                     systemPrompt: systemPrompt,
                     userPrompt: userPrompt,
                     temperature: 0.3,
                     maxTokens: 4096);
+                
+                if (usage != null)
+                {
+                    Console.WriteLine($"  📊 Токены: {usage.PromptTokens} в → {usage.CompletionTokens} out → {usage.TotalTokens} всего");
+                }
                 return localAnswer;
             }
             catch (Exception ex)
