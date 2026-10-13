@@ -1,0 +1,23 @@
+[Unit]
+Description=Ollama Chat Server
+After=network.target ollama.service
+
+[Service]
+Type=simple
+User=user
+WorkingDirectory=/home/user/ollama-chat
+Environment="OLLAMA_URL=http://127.0.0.1:11434"
+Environment="MODEL=llama3.2:3b"
+Environment="PORT=8080"
+ExecStart=/usr/bin/python3 /home/user/ollama-chat/server.py
+Restart=always
+RestartSec=5
+
+# Security
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/user/ollama-chat
+
+[Install]
+WantedBy=multi-user.target
